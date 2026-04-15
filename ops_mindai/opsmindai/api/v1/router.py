@@ -1,1 +1,0 @@
-print("Hello Bacchooo Welcome  to the world of FastAPI")
