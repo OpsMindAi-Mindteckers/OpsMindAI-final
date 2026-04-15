@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+pydantic[email]
+pydantic-settings
+pyjwt[crypto]
+httpx
+slowapi
+python-dotenv
