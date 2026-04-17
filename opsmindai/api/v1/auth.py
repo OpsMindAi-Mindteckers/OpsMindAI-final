@@ -357,13 +357,13 @@ async def login(
 
                 _set_auth_cookie(response, fresh_token)
 
-                print(f"[login] ✅ already authenticated as {user_email}")
+                print(f"[login] already authenticated as {user_email}")
                 return LoginOut(
                     access_token=fresh_token,
                     refresh_token=active_sid,
                     expires_in=3600,
                     already_logged_in=True,
-                    message=f"✅ You are already logged in as {user_email}",
+                    message=f" You are already logged in as {user_email}",
                     user_email=user_email,
                 )
             else:
@@ -399,7 +399,7 @@ async def login(
             refresh_token=session["id"],
             expires_in=3600,
             already_logged_in=False,
-            message=f"✅ Logged in as {body.email}",
+            message=f"Logged in as {body.email}",
             user_email=body.email,
         )
     except HTTPException:
@@ -414,21 +414,50 @@ async def login(
 async def set_cookie_after_clerk_signin(
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
 ):
     """
-    Called by the /login page after Clerk frontend sign-in (Google/GitHub/email).
-    Reads the Bearer token from the page's JS, verifies it via get_current_user,
-    then stores it in a cookie so Swagger and any other UI on this domain
-    automatically share the session.
+    Called by the /login page after Clerk frontend sign-in.
+    Does NOT use get_current_user (which might read the old cookie).
+    Instead, reads the Bearer token directly from the Authorization header.
     """
-    creds: Optional[HTTPAuthorizationCredentials] = await bearer_scheme(request)
-    if not creds:
-        raise HTTPException(400, "Bearer token required to set cookie")
-    _set_auth_cookie(response, creds.credentials)
-    print(f"[set-cookie] cookie set for {user.email}")
-    return {"status": "cookie set", "user_email": user.email}
+    # Always clear old cookie first — prevents stale session conflicts
+    response.delete_cookie(key=COOKIE_NAME, path="/")
 
+    # Read the Bearer token from the Authorization header
+    creds = await bearer_scheme(request)
+    if not creds:
+        raise HTTPException(400, "Bearer token required")
+
+    token = creds.credentials
+
+    # Quick validation: decode to get user_id, verify with Clerk
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False})
+        user_id = payload.get("sub")
+        sid = payload.get("sid")
+        print(f"[set-cookie] decoded: sub={user_id} sid={sid}")
+    except Exception as e:
+        raise HTTPException(400, f"Invalid token: {e}")
+
+    if not user_id:
+        raise HTTPException(400, "Token has no user ID")
+
+    # Verify the user exists on Clerk
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(f"{CLERK_API}/users/{user_id}", headers=_headers())
+    if r.status_code != 200:
+        raise HTTPException(401, "User not found on Clerk")
+
+    user_email = ""
+    emails = r.json().get("email_addresses") or []
+    if emails:
+        user_email = emails[0].get("email_address", "")
+
+    # Set the NEW cookie
+    _set_auth_cookie(response, token)
+    print(f"[set-cookie] ✅ cookie set for {user_email} (replaces any previous)")
+
+    return {"status": "cookie set", "user_email": user_email}
 
 @router.post("/clear-cookie", status_code=200)
 async def clear_auth_cookie(response: Response):
