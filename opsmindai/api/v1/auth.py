@@ -9,10 +9,13 @@ opsmindai/api/v1/auth.py
 - get_current_user -> checks Bearer token OR cookie, verifies via Clerk
 """
 from typing import Optional
+from datetime import datetime, timedelta, timezone
+import secrets
+import hashlib
+
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +23,11 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from opsmindai.core.config import settings
-from opsmindai.db.models import User
+from opsmindai.db.models import User, APIKey
 from opsmindai.db.session import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 limiter = Limiter(key_func=get_remote_address)
-bearer_scheme = HTTPBearer(auto_error=False)
 
 CLERK_API = "https://api.clerk.com/v1"
 COOKIE_NAME = "opsmindai_token"
@@ -54,13 +56,15 @@ def _set_auth_cookie(response: Response, token: str) -> None:
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str
-    full_name: str
+    username: Optional[str] = None
+
 
 
 class LoginIn(BaseModel):
     # BOTH optional — empty body {} is valid for "am I already logged in?" check
     email: Optional[EmailStr] = None
     password: Optional[str] = None
+    username: Optional[str] = None
 
 
 class TokenOut(BaseModel):
@@ -82,16 +86,26 @@ class LoginOut(BaseModel):
     already_logged_in: bool = False
     message: str
     user_email: Optional[str] = None
+    username: Optional[str] = None
 
+class ApiKeyIn(BaseModel):
+    name: str
+
+
+class ApiKeyOut(BaseModel):
+    key_id: str
+    api_key: str                           # shown ONCE — full plaintext key
+    name: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    message: str = "Save this key now — you won't see it again."
 
 # ---------- Clerk Backend API helpers ----------
-async def _clerk_create_user(email: str, password: str, full_name: str) -> dict:
-    first, _, last = full_name.partition(" ")
+async def _clerk_create_user(email: str, password: str, username: str) -> dict:
     payload = {
         "email_address": [email],
         "password": password,
-        "first_name": first or full_name,
-        "last_name": last,
+        "username": username,
     }
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.post(f"{CLERK_API}/users", headers=_headers(), json=payload)
@@ -112,7 +126,18 @@ async def _clerk_find_user_by_email(email: str) -> Optional[dict]:
         return None
     data = r.json()
     return data[0] if data else None
-
+async def _clerk_find_user_by_username(username: str) -> Optional[dict]:
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(
+            f"{CLERK_API}/users",
+            headers=_headers(),
+            params=[("username", username)],
+        )
+    if r.status_code >= 400:
+        print(f"[Clerk find user by username error] {r.status_code}: {r.text}")
+        return None
+    data = r.json()
+    return data[0] if data else None
 
 async def _clerk_verify_password(user_id: str, password: str) -> bool:
     async with httpx.AsyncClient(timeout=15) as c:
@@ -154,6 +179,25 @@ async def _clerk_get_user_email(user_id: str) -> str:
     emails = r.json().get("email_addresses") or []
     return emails[0].get("email_address", "") if emails else ""
 
+# ---------- API Key helpers ----------
+def _generate_api_key() -> tuple[str, str, str]:
+    """
+    Generate a new API key.
+    Returns (raw_key, prefix, hashed_key):
+      - raw_key    → full plaintext, shown to user ONCE (never stored)
+      - prefix     → first 8 chars of raw_key, stored for display ("opsm_liv")
+      - hashed_key → SHA-256 hash, stored for verification
+    """
+    random_part = secrets.token_urlsafe(32)
+    raw_key = f"opsm_live_{random_part}"
+    prefix = raw_key[:8]
+    hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
+    return raw_key, prefix, hashed_key
+
+
+'''def _hash_api_key(raw_key: str) -> str:
+    """Hash a raw API key for comparison with stored hash."""
+    return hashlib.sha256(raw_key.encode()).hexdigest()'''
 
 async def _clerk_revoke_all_user_sessions(user_id: str) -> int:
     async with httpx.AsyncClient(timeout=15) as c:
@@ -185,17 +229,19 @@ async def _clerk_revoke_all_user_sessions(user_id: str) -> int:
 # ---------- Dependency: verify token via Clerk session lookup ----------
 async def get_current_user(
     request: Request,
-    creds: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     # Try Bearer first, fall back to cookie
-    token = None
-    if creds:
-        token = creds.credentials
-        print("[auth] using Bearer token")
-    elif request.cookies.get(COOKIE_NAME):
-        token = request.cookies.get(COOKIE_NAME)
+    token = request.cookies.get(COOKIE_NAME)  # default to cookie for logging
+    if token:
         print("[auth] using cookie token")
+    if not token:
+        # Fallback: check Authorization header (for API clients like curl/Postman)
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            print("[auth] using Bearer token from header")
+
 
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token or auth cookie")
@@ -258,10 +304,8 @@ async def get_current_user(
         cu = r.json()
         emails = cu.get("email_addresses") or []
         email = emails[0].get("email_address", "") if emails else ""
-        first = cu.get("first_name") or ""
-        last = cu.get("last_name") or ""
-        full_name = f"{first} {last}".strip() or email or "Unknown"
-        user = User(id=user_id, email=email, full_name=full_name)
+        username = cu.get("username") or ""
+        user = User(id=user_id, email=email, username=username)
         db.add(user)
         await db.commit()
         await db.refresh(user)
@@ -283,8 +327,8 @@ async def register(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    clerk_user = await _clerk_create_user(body.email, body.password, body.full_name)
-    user = User(id=clerk_user["id"], email=body.email, full_name=body.full_name)
+    clerk_user = await _clerk_create_user(body.email, body.password, body.username)
+    user = User(id=clerk_user["id"], email=body.email, username=body.username)
     db.add(user)
     await db.commit()
 
@@ -307,7 +351,6 @@ async def login(
     request: Request,
     response: Response,
     body: LoginIn,
-    creds: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -317,13 +360,14 @@ async def login(
     Always sets the shared auth cookie on success so all UIs share the session.
     """
     # Step 1: detect existing auth
-    existing_token = None
-    if creds:
-        existing_token = creds.credentials
-        print("[login] checking Bearer token...")
-    elif request.cookies.get(COOKIE_NAME):
-        existing_token = request.cookies.get(COOKIE_NAME)
+    existing_token = request.cookies.get(COOKIE_NAME)
+    if existing_token:
         print("[login] checking cookie token...")
+    else:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            existing_token = auth_header[7:]
+            print("[login] checking Bearer token from header...")
 
     if existing_token:
         try:
@@ -358,6 +402,13 @@ async def login(
                 _set_auth_cookie(response, fresh_token)
 
                 print(f"[login] already authenticated as {user_email}")
+                user_username = ""
+                async with httpx.AsyncClient(timeout=10) as c:
+                    ur2 = await c.get(f"{CLERK_API}/users/{user_id}", headers=_headers())
+                if ur2.status_code == 200:
+                    user_username = ur2.json().get("username") or ""
+
+                identifier = user_email or user_username
                 return LoginOut(
                     access_token=fresh_token,
                     refresh_token=active_sid,
@@ -365,6 +416,7 @@ async def login(
                     already_logged_in=True,
                     message=f" You are already logged in as {user_email}",
                     user_email=user_email,
+                    username=user_username,
                 )
             else:
                 print("[login] token present but no active session — falling through to password")
@@ -372,15 +424,23 @@ async def login(
             print(f"[login] existing token check failed: {e} — falling through to password")
 
     # Step 2: no valid auth — require email + password
-    if not body.email or not body.password:
-        raise HTTPException(
-            400,
-            "Not logged in. Provide email + password, or sign in via /login page first.",
-        )
+    # Step 2: no valid auth — require (email OR username) + password
+    if not body.password:
+        raise HTTPException(400, "Not logged in. Provide (email or username) + password, or sign in via /login page first.")
+
+    if not body.email and not body.username:
+        raise HTTPException(400, "Provide either email or username along with password.")
 
     try:
-        clerk_user = await _clerk_find_user_by_email(body.email)
-        print(f"[login] found user: {clerk_user.get('id') if clerk_user else None}")
+        # Find user by email OR username
+        clerk_user = None
+        if body.email:
+            clerk_user = await _clerk_find_user_by_email(body.email)
+            print(f"[login] found by email: {clerk_user.get('id') if clerk_user else None}")
+        elif body.username:
+            clerk_user = await _clerk_find_user_by_username(body.username)
+            print(f"[login] found by username: {clerk_user.get('id') if clerk_user else None}")
+
         if not clerk_user:
             raise HTTPException(401, "Invalid credentials")
 
@@ -392,15 +452,21 @@ async def login(
         session = await _clerk_create_session(clerk_user["id"])
         token = await _clerk_session_token(session["id"])
 
+        # Get email and username from Clerk
+        user_email = (clerk_user.get("email_addresses") or [{}])[0].get("email_address", "")
+        user_username = clerk_user.get("username") or ""
+
         _set_auth_cookie(response, token)
 
+        identifier = user_email or user_username
         return LoginOut(
             access_token=token,
             refresh_token=session["id"],
             expires_in=3600,
             already_logged_in=False,
-            message=f"Logged in as {body.email}",
-            user_email=body.email,
+            message=f"✅ Logged in as {identifier}",
+            user_email=user_email,
+            username=user_username,
         )
     except HTTPException:
         raise
@@ -424,11 +490,10 @@ async def set_cookie_after_clerk_signin(
     response.delete_cookie(key=COOKIE_NAME, path="/")
 
     # Read the Bearer token from the Authorization header
-    creds = await bearer_scheme(request)
-    if not creds:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
         raise HTTPException(400, "Bearer token required")
-
-    token = creds.credentials
+    token = auth_header[7:]
 
     # Quick validation: decode to get user_id, verify with Clerk
     try:
@@ -455,7 +520,7 @@ async def set_cookie_after_clerk_signin(
 
     # Set the NEW cookie
     _set_auth_cookie(response, token)
-    print(f"[set-cookie] ✅ cookie set for {user_email} (replaces any previous)")
+    print(f"[set-cookie] cookie set for {user_email} (replaces any previous)")
 
     return {"status": "cookie set", "user_email": user_email}
 
@@ -479,4 +544,76 @@ async def logout(
     revoked = await _clerk_revoke_all_user_sessions(user.id)
     print(f"[logout] user={user.id} revoked {revoked} sessions")
     response.delete_cookie(key=COOKIE_NAME, path="/")
+    return
+# ---------- /api-key POST ----------
+@router.post("/api-key", status_code=201, response_model=ApiKeyOut)
+@limiter.limit("5/day")
+async def create_api_key(
+    request: Request,
+    body: ApiKeyIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a long-lived API key for programmatic access.
+    The full key is returned ONCE — only its hash is stored.
+    Use the key in future requests as:  Authorization: Bearer opsm_live_xxx
+    """
+    if not body.name or len(body.name.strip()) == 0:
+        raise HTTPException(400, "name is required")
+
+    # Generate key components
+    raw_key, prefix, hashed_key = _generate_api_key()
+
+    # Default expiry: 1 year from now
+    expires = datetime.now(timezone.utc) + timedelta(days=365)
+
+    # Save only hash + prefix to DB (never the raw key)
+    api_key = APIKey(
+        user_id=user.id,
+        name=body.name.strip(),
+        prefix=prefix,
+        hashed_key=hashed_key,
+        expires_at=expires,
+    )
+    db.add(api_key)
+    await db.commit()
+    await db.refresh(api_key)
+
+    print(f"[api-key]  created key {api_key.key_id} for user {user.id}")
+    return ApiKeyOut(
+        key_id=api_key.key_id,
+        api_key=raw_key,                        # full key shown ONCE
+        name=api_key.name,
+        created_at=api_key.created_at,
+        expires_at=api_key.expires_at,
+    )
+
+
+# ---------- /api-key DELETE ----------
+@router.delete("/api-key/{key_id}", status_code=204)
+@limiter.limit("20/hour")
+async def delete_api_key(
+    request: Request,
+    key_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Permanently revoke and delete an API key.
+    Users can only delete their own keys.
+    """
+    res = await db.execute(select(APIKey).where(APIKey.key_id == key_id))
+    api_key = res.scalar_one_or_none()
+
+    if not api_key:
+        raise HTTPException(404, "API key not found")
+
+    if api_key.user_id != user.id:
+        raise HTTPException(403, "Not your API key")
+
+    await db.delete(api_key)
+    await db.commit()
+
+    print(f"[api-key] deleted key {key_id} for user {user.id}")
     return
