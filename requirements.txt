@@ -1,10 +1,75 @@
+# fastapi
+# uvicorn[standard]
+# sqlalchemy[asyncio]
+# aiosqlite
+# pydantic[email]
+# pydantic-settings
+# pyjwt[crypto]
+# httpx
+# slowapi
+# python-dotenv
+
+
+
+
+
+# ── Web framework ─────────────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
+
+# ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy[asyncio]
 aiosqlite
+
+# ── Pydantic / config ─────────────────────────────────────────────────────────
 pydantic[email]
 pydantic-settings
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 pyjwt[crypto]
+
+# ── HTTP client ───────────────────────────────────────────────────────────────
 httpx
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
 slowapi
+
+# ── Environment ───────────────────────────────────────────────────────────────
 python-dotenv
+
+# ── Redis (async + sync both needed: FastAPI uses async, Celery uses sync) ────
+redis[asyncio,hiredis]>=5.0
+
+# ── Task queue ────────────────────────────────────────────────────────────────
+celery[redis]>=5.3
+
+# ── AST parsing (Code Refactor agent) ────────────────────────────────────────
+tree-sitter>=0.21
+tree-sitter-python>=0.21
+tree-sitter-javascript>=0.21
+
+# ── Kubernetes client (SRE-GPT deployment_differ + remediation_executor) ─────
+# kubectl binary required separately — install via your OS package manager.
+# Optional Python client for future migration away from subprocess:
+# kubernetes>=29.0
+
+# ── LLM inference ─────────────────────────────────────────────────────────────
+anthropic>=0.25
+openai>=1.30
+
+# ── RAG / vector store ────────────────────────────────────────────────────────
+sentence-transformers>=2.7
+chromadb>=0.5           # dev vector store (VECTOR_STORE=chromadb)
+qdrant-client>=1.9      # prod vector store (VECTOR_STORE=qdrant)
+
+# ── GitHub integration (patch_writer) ────────────────────────────────────────
+PyGithub>=2.3
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+prometheus-client>=0.20
+
+
+
+
+
+
