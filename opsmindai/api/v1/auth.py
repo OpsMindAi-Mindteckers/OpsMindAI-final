@@ -54,8 +54,8 @@ def _set_auth_cookie(response: Response, token: str) -> None:
 
 # ---------- Pydantic schemas ----------
 class RegisterIn(BaseModel):
-    email: EmailStr
-    password: str
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
     username: Optional[str] = None
 
 
@@ -304,8 +304,8 @@ async def get_current_user(
         cu = r.json()
         emails = cu.get("email_addresses") or []
         email = emails[0].get("email_address", "") if emails else ""
-        username = cu.get("username") or ""
-        user = User(id=user_id, email=email, username=username)
+        full_name = cu.get("first_name", "") + " " + cu.get("last_name", "")
+        user = User(id=user_id, email=email, full_name=full_name.strip() or None)
         db.add(user)
         await db.commit()
         await db.refresh(user)
@@ -328,7 +328,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     clerk_user = await _clerk_create_user(body.email, body.password, body.username)
-    user = User(id=clerk_user["id"], email=body.email, username=body.username)
+    user = User(id=clerk_user["id"], email=body.email)
     db.add(user)
     await db.commit()
 
