@@ -25,6 +25,9 @@ from opsmindai.api.v1.auth import limiter
 from opsmindai.api.v1.router import api_router
 from opsmindai.core.redis import create_redis_pool, close_redis_pool
 from opsmindai.db.session import init_db
+from opsmindai.middleware.auth import AuthMiddleware
+from opsmindai.middleware.rate_limiter import RateLimiterMiddleware
+from opsmindai.middleware.logging import RequestLoggingMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,14 @@ app = FastAPI(
     swagger_ui_parameters={"persistAuthorization": True},
 )
 
-# Middleware (order matters — outermost runs first)
+# Middleware (order matters — outermost wraps run first on request, last on response)
+# RequestLoggingMiddleware → outermost (sees every request + final status code)
+# RateLimiterMiddleware    → before auth (rejects floods before Clerk API calls)
+# AuthMiddleware           → before route handlers
+# RequestIDMiddleware      → innermost (attaches request_id used by logging above)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimiterMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 # Rate-limit error handler
@@ -83,6 +93,21 @@ app.include_router(api_router, prefix="/api/v1")
 
 # Static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """
+    Prometheus metrics endpoint (SRS §11.1, FR-07).
+    Exposes all 8 opsmind_* metrics in Prometheus text format.
+    Not protected by auth — Prometheus scrapes this internally.
+    """
+    from fastapi.responses import Response
+    from opsmindai.monitoring.prometheus_client import get_metrics_output
+    body, content_type = get_metrics_output()
+    return Response(content=body, media_type=content_type)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
