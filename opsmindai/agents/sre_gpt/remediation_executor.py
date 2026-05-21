@@ -519,7 +519,7 @@ async def _dispatch_refactor(file_path: str) -> None:
         task_run_analysis.apply_async(
             args=[job_id, {
                 "repo_url":   repo_url,
-                "branch":     "main",
+                "branch":     "master",
                 "file_paths": [file_path],
                 "user_id":    "sre_gpt",
                 "severity_threshold": "medium",

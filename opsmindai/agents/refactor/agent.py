@@ -158,7 +158,7 @@ async def run_analysis(job_id: str, payload: dict, redis) -> None:
     try:
         token      = os.environ.get("GITHUB_TOKEN", "")
         repo_url   = payload["repo_url"]
-        branch     = payload.get("branch", "main")
+        branch     = payload.get("branch", "master")
         file_paths = payload.get("file_paths", [])
         sev_str    = payload.get("severity_threshold", "medium")
         severity   = SmellSeverity(sev_str)
@@ -223,7 +223,7 @@ async def run_suggest(job_id: str, payload: dict, redis) -> None:
     try:
         token      = os.environ.get("GITHUB_TOKEN", "")
         repo_url   = payload["repo_url"]
-        branch     = payload.get("branch", "main")
+        branch     = payload.get("branch", "master")
         smells_raw = payload.get("smells", [])
         smells     = [SmellItem(**s) for s in smells_raw]
 
@@ -252,10 +252,9 @@ async def run_suggest(job_id: str, payload: dict, redis) -> None:
             rag = RAGPipeline()
             patch_summary = "; ".join(f"{p.file}: +{p.additions} -{p.deletions}" for p in patches)
             smell_summary = "; ".join(f"{s.smell_type}@{s.file}:{s.line}" for s in smells[:5])
-            await rag.embed(
+            await rag.add_results(
                 content=f"Refactor job {job_id}. Smells: {smell_summary}. Patches: {patch_summary}",
-                doc_type="refactor_pattern",
-                metadata={"job_id": job_id, "repo": repo_url, "files": smell_files},
+                metadata={"type": "refactor_pattern", "job_id": job_id, "repo": repo_url, "files": smell_files},
             )
         except Exception as exc:
             logger.warning("RAG embed failed (non-fatal): %s", exc)
@@ -292,7 +291,7 @@ async def run_apply(job_id: str, payload: dict, redis) -> None:
 
     try:
         repo_url     = payload["repo_url"]
-        branch       = payload.get("branch", "main")
+        branch       = payload.get("branch", "master")
         patches_raw  = payload.get("patches", [])
         smells_raw   = payload.get("smells", [])
         patches      = [PatchFile(**p) for p in patches_raw]

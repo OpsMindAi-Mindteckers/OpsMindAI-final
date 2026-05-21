@@ -69,7 +69,7 @@ class TestGenerateEndpoint:
     async def test_returns_job_id_on_valid_request(self, app_client):
         payload = {
             "repo_url": "https://github.com/example/myrepo",
-            "branch": "main",
+            "branch": "master",
             "framework": "pytest",
             "coverage_threshold": 0.80,
         }
@@ -86,7 +86,7 @@ class TestGenerateEndpoint:
         assert data["status"] == "queued"
 
     async def test_returns_422_for_missing_repo_url(self, app_client):
-        payload = {"branch": "main", "framework": "pytest"}
+        payload = {"branch": "master", "framework": "pytest"}
 
         async with AsyncClient(
             transport=ASGITransport(app=app_client), base_url="http://test",
@@ -152,7 +152,7 @@ class TestSuiteEndpoint:
             "status": "completed",
             "repo_url": "https://github.com/example/repo",
             "repo_path": "/tmp/repo",
-            "branch": "main",
+            "branch": "master",
         }
         await mock_redis.setex(f"testing:job:{gen_job_id}", 3600, json.dumps(gen_job_data))
 
@@ -177,7 +177,7 @@ class TestRegressionEndpoint:
     async def test_returns_job_id_on_valid_request(self, app_client):
         payload = {
             "repo_url": "https://github.com/example/repo",
-            "branch": "main",
+            "branch": "master",
         }
 
         async with AsyncClient(

@@ -239,10 +239,10 @@ async def generate_refactor(
     try:
         rag_results = await rag.retrieve(
             query=f"refactor {smell_summary}",
-            doc_type="refactor_pattern",
+            filter_type="refactor_pattern",
             top_k=3,
         )
-        rag_contexts = [r["content"] for r in rag_results]
+        rag_contexts = [r.content for r in rag_results]
         logger.info("RAG retrieved %d refactor patterns", len(rag_contexts))
     except Exception as exc:
         logger.warning("RAG retrieval failed (continuing without context): %s", exc)

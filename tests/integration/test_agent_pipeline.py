@@ -30,7 +30,7 @@ class TestEventNormalisation:
 
     def test_github_push_normalised_correctly(self):
         payload = {
-            "ref": "refs/heads/main",
+            "ref": "refs/heads/master",
             "repository": {"clone_url": "https://github.com/org/repo.git"},
             "commits": [{"modified": ["src/api.py", "src/utils.py"], "added": []}],
         }
@@ -38,7 +38,7 @@ class TestEventNormalisation:
         event = normalise("github", payload)
         assert event.event_type == EventType.PUSH
         assert event.source == EventSource.GITHUB
-        assert event.branch == "main"
+        assert event.branch == "master"
         assert "src/api.py" in event.file_paths
 
     def test_github_pull_request_normalised(self):
@@ -47,7 +47,7 @@ class TestEventNormalisation:
             "pull_request": {
                 "number": 42,
                 "head": {"ref": "feature/auth"},
-                "base": {"ref": "main"},
+                "base": {"ref": "master"},
                 "body": "Add auth middleware",
             },
             "repository": {"clone_url": "https://github.com/org/repo.git"},
@@ -125,7 +125,7 @@ class TestTaskRouting:
             "service": "api-service",
             "severity": "medium",
             "repo_url": "https://github.com/org/repo",
-            "branch": "main",
+            "branch": "master",
             "pr_number": None,
             "file_paths": [],
             "labels": {},

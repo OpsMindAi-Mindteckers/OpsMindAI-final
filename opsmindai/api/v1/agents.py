@@ -386,7 +386,7 @@ class AgentConfigResponse(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     repo_url: str = Field(..., description="HTTPS GitHub repo URL")
-    branch: str = Field("main", description="Branch to analyse")
+    branch: str = Field("master", description="Branch to analyse")
     file_paths: list[str] = Field(
         default_factory=list,
         description="Specific files to analyse. Leave empty to scan whole repo.",
@@ -400,7 +400,7 @@ class AnalyzeRequest(BaseModel):
 
 class SuggestRequest(BaseModel):
     repo_url: str = Field(..., description="HTTPS GitHub repo URL")
-    branch: str = Field("main")
+    branch: str = Field("master")
     source_job_id: str = Field(
         ..., description="job_id from a completed /analyze job"
     )
@@ -408,7 +408,7 @@ class SuggestRequest(BaseModel):
 
 class ApplyRequest(BaseModel):
     repo_url: str = Field(..., description="HTTPS GitHub repo URL")
-    branch: str = Field("main")
+    branch: str = Field("master")
     source_job_id: str = Field(
         ..., description="job_id from a completed /suggest job"
     )

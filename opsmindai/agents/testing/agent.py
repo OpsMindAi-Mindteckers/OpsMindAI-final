@@ -161,7 +161,7 @@ async def run_generation(job_id: str, payload: dict, redis) -> None:
     try:
         token      = os.environ.get("GITHUB_TOKEN", "")
         repo_url   = payload["repo_url"]
-        branch     = payload.get("branch", "main")
+        branch     = payload.get("branch", "master")
         framework  = payload.get("framework", "pytest")
         threshold  = float(payload.get("coverage_threshold", 0.80))
         file_path  = payload.get("file_path")   # may be None → generate for all
@@ -267,7 +267,7 @@ async def run_suite(job_id: str, payload: dict, redis) -> None:
         state      = json.loads(raw)
         repo_root  = state.get("repo_root")
         repo_url   = state.get("repo_url", payload.get("repo_url", ""))
-        branch     = state.get("branch", payload.get("branch", "main"))
+        branch     = state.get("branch", payload.get("branch", "master"))
         framework  = state.get("framework", payload.get("framework", "pytest"))
         threshold  = float(state.get("threshold", payload.get("coverage_threshold", 0.80)))
         pr_number  = payload.get("pr_number")
@@ -352,7 +352,7 @@ async def run_regression(job_id: str, payload: dict, redis) -> None:
     try:
         token         = os.environ.get("GITHUB_TOKEN", "")
         repo_url      = payload["repo_url"]
-        branch        = payload.get("branch", "main")
+        branch        = payload.get("branch", "master")
         trigger_event = payload.get("trigger_event", {"type": "manual"})
 
         repo_root = _clone_repo(repo_url, branch, token)

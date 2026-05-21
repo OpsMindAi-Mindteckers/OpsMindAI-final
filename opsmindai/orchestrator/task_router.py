@@ -104,7 +104,7 @@ def _route_code_event(event: NormalisedEvent) -> list[AgentTask]:
             triggered_by = event.event_id,
             payload      = {
                 "repo_url":   event.repo_url  or "",
-                "branch":     event.branch    or "main",
+                "branch":     event.branch    or "master",
                 "file_paths": event.file_paths,
                 "pr_number":  event.pr_number,
                 "user_id":    "webhook",
@@ -161,7 +161,7 @@ def _route_coverage_drop(event: NormalisedEvent) -> AgentTask:
         triggered_by = event.event_id,
         payload      = {
             "repo_url":           event.repo_url or "",
-            "branch":             event.branch   or "main",
+            "branch":             event.branch   or "master",
             "file_path":          event.file_paths[0] if event.file_paths else None,
             "framework":          "pytest",
             "coverage_threshold": 0.80,

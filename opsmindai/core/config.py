@@ -28,7 +28,12 @@
 
 
 
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Absolute path to .env — works regardless of where the process is started from
+# (Celery workers change cwd, so relative ".env" lookup fails)
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -54,9 +59,10 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.80   # route to cloud below this
 
     # ── LLM — cloud ───────────────────────────────────────────────────────────
-    CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai
-    ANTHROPIC_API_KEY:  str = ""
-    OPENAI_API_KEY:     str = ""
+    CLOUD_LLM_PROVIDER:   str = "openrouter"          # openrouter | openai
+    OPENROUTER_API_KEY:   str = ""
+    OPENROUTER_MODEL:     str = "meta-llama/llama-3.2-3b-instruct:free"
+    OPENAI_API_KEY:       str = ""
 
     # ── Vector store ──────────────────────────────────────────────────────────
     VECTOR_STORE:   str = "chromadb"              # chromadb | qdrant
@@ -91,8 +97,9 @@ class Settings(BaseSettings):
     SLO_ERROR_RATE:     float = 0.01
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",         # ignore unknown env vars — safe for all envs
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # ── Computed properties ───────────────────────────────────────────────────

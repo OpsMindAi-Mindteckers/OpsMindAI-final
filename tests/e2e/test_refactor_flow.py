@@ -101,7 +101,7 @@ class TestPrToRefactorDispatch:
             "pull_request": {
                 "number": 99,
                 "head": {"ref": "fix/db-pool"},
-                "base": {"ref": "main"},
+                "base": {"ref": "master"},
             },
             "repository": {"clone_url": "https://github.com/org/repo.git"},
         }
@@ -116,7 +116,7 @@ class TestPrToRefactorDispatch:
             "pull_request": {
                 "number": 7,
                 "head": {"ref": "add-tests"},
-                "base": {"ref": "main"},
+                "base": {"ref": "master"},
             },
             "repository": {"clone_url": "https://github.com/org/repo.git"},
             "head_commit": {"modified": ["src/api.py", "tests/test_api.py"]},
@@ -258,7 +258,7 @@ class TestFullRefactorPipeline:
             "pull_request": {
                 "number": 55,
                 "head": {"ref": "refactor/cleanup"},
-                "base": {"ref": "main"},
+                "base": {"ref": "master"},
             },
             "repository": {"clone_url": "https://github.com/org/service.git"},
         }

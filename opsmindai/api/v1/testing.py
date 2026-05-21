@@ -45,7 +45,7 @@ def _user_index_key(user_id: str) -> str:
 class GenerateRequest(BaseModel):
     repo_url:           str   = Field(..., description="GitHub HTTPS URL of the repository")
     file_path:          Optional[str] = Field(None, description="Relative path to source file. Omit to generate for all files.")
-    branch:             str   = Field("main", description="Branch to clone")
+    branch:             str   = Field("master", description="Branch to clone")
     framework:          str   = Field("pytest", description="Test framework: 'pytest' or 'jest'")
     coverage_threshold: float = Field(0.80, ge=0.0, le=1.0, description="Minimum coverage gate (0.0–1.0)")
     pr_number:          Optional[int] = Field(None, description="GitHub PR number — triggers PR comment on gate failure")
@@ -58,7 +58,7 @@ class SuiteRequest(BaseModel):
 
 class RegressionRequest(BaseModel):
     repo_url:      str  = Field(..., description="GitHub HTTPS URL of the repository")
-    branch:        str  = Field("main", description="Branch to clone")
+    branch:        str  = Field("master", description="Branch to clone")
     trigger_event: dict = Field(default_factory=lambda: {"type": "manual"}, description="Event that triggered the regression run")
 
 

@@ -68,7 +68,7 @@ class TestRefactorAnalysisDispatch:
     async def test_generate_returns_job_id(self, app_client):
         payload = {
             "repo_url": "https://github.com/example/service",
-            "branch": "main",
+            "branch": "master",
             "framework": "pytest",
             "coverage_threshold": 0.80,
         }
@@ -87,7 +87,7 @@ class TestRefactorAnalysisDispatch:
     async def test_job_id_is_unique_per_request(self, app_client):
         payload = {
             "repo_url": "https://github.com/example/service",
-            "branch": "main",
+            "branch": "master",
             "framework": "pytest",
             "coverage_threshold": 0.80,
         }
@@ -104,7 +104,7 @@ class TestRefactorAnalysisDispatch:
     async def test_job_status_queued_on_creation(self, app_client, mock_redis):
         payload = {
             "repo_url": "https://github.com/example/service",
-            "branch": "main",
+            "branch": "master",
             "framework": "pytest",
             "coverage_threshold": 0.80,
         }
@@ -151,7 +151,7 @@ class TestRegressionEndpoint:
     async def test_regression_with_invalid_threshold_rejected(self, app_client):
         payload = {
             "repo_url": "https://github.com/example/repo",
-            "branch": "main",
+            "branch": "master",
             "coverage_threshold": 1.5,   # > 1.0 should fail validation
             "framework": "pytest",
         }

@@ -1,13 +1,13 @@
 """
 opsmindai/inference/hybrid_router.py
 
-Routes LLM calls to local (Ollama) or cloud LLM based on task complexity.
+Routes LLM calls between local Ollama and cloud OpenRouter based on task complexity.
 
 Routing rules (SRS FR-13):
-  - token_count > 2000 OR score < CONFIDENCE_THRESHOLD → cloud
+  - token_count > 2000 OR score < CONFIDENCE_THRESHOLD → OpenRouter (cloud)
   - otherwise → local Ollama
 
-Fallback (SRS FR-15): if Ollama unreachable, cloud activates automatically.
+Fallback (SRS FR-15): if Ollama unreachable, OpenRouter activates automatically.
 """
 
 from __future__ import annotations
@@ -47,22 +47,54 @@ def score_task(prompt: str, task_type: str) -> float:
 
 def route(prompt: str, task_type: str) -> Literal["local", "cloud"]:
     """
-    Return 'local' or 'cloud' based on prompt complexity (SRS FR-13).
+    Return 'local' (Ollama) or 'cloud' (OpenRouter) based on prompt complexity.
+
+    Always tries Ollama first; OpenRouter is used only as a fallback when
+    Ollama is unreachable or errors.
 
     Args:
         prompt:    Full prompt string.
         task_type: Task category for heuristic weighting.
 
     Returns:
-        'local' or 'cloud'.
+        Always 'local' — cloud fallback is handled inside call_llm.
     """
-    token_count = len(prompt) / 4
-    if token_count > 2000:
-        return "cloud"
-    score = score_task(prompt, task_type)
-    if score < settings.CONFIDENCE_THRESHOLD:
-        return "cloud"
     return "local"
+
+
+class HybridRouter:
+    """
+    Provides an `infer()` method that routes between Ollama and OpenRouter.
+    """
+
+    async def infer(
+        self,
+        user_prompt: str,
+        task_type: str = "default",
+        system_prompt: Optional[str] = None,
+        estimated_tokens: int = 0,
+    ) -> dict:
+        """
+        Route the prompt to Ollama or OpenRouter and return a response dict.
+
+        Returns:
+            {"text": str, "tokens_used": int, "model": str}
+        """
+        from opsmindai.inference import local_llm, cloud_llm
+
+        decision = route(user_prompt, task_type)
+
+        if decision == "local" and await local_llm.is_available():
+            model_label = f"ollama/{local_llm.get_model_name()}"
+        else:
+            model_label = cloud_llm.get_model_name()
+
+        text = await call_llm(user_prompt, task_type=task_type, system_prompt=system_prompt)
+        return {
+            "text":        text,
+            "tokens_used": estimated_tokens or int(len(user_prompt) / 4),
+            "model":       model_label,
+        }
 
 
 async def call_llm(
@@ -71,9 +103,9 @@ async def call_llm(
     system_prompt: Optional[str] = None,
 ) -> str:
     """
-    Route to local_llm or cloud_llm and return generated text.
+    Route to Ollama (local) or OpenRouter (cloud) and return generated text.
 
-    If Ollama is unreachable, falls back to cloud automatically (SRS FR-15).
+    If Ollama is unreachable, falls back to OpenRouter automatically (SRS FR-15).
 
     Args:
         prompt:        User prompt.
@@ -97,12 +129,12 @@ async def call_llm(
             try:
                 return await local_llm.generate(prompt, system=system_prompt)
             except Exception as exc:
-                logger.warning("local LLM error (%s) — falling back to cloud", exc)
+                logger.warning("Ollama error (%s) — falling back to OpenRouter", exc)
         else:
-            logger.warning("Ollama unreachable — auto-activating cloud LLM (FR-15)")
+            logger.warning("Ollama unreachable — auto-activating OpenRouter (FR-15)")
 
     logger.info(
-        "routing=cloud task=%s tokens≈%d provider=%s",
-        task_type, approx_tokens, settings.CLOUD_LLM_PROVIDER,
+        "routing=cloud task=%s tokens≈%d provider=%s model=%s",
+        task_type, approx_tokens, settings.CLOUD_LLM_PROVIDER, cloud_llm.get_model_name(),
     )
     return await cloud_llm.generate(prompt, system=system_prompt)
