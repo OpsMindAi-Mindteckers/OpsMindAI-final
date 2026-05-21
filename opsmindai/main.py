@@ -15,6 +15,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
@@ -75,10 +76,24 @@ app = FastAPI(
 )
 
 # Middleware (order matters — outermost wraps run first on request, last on response)
-# RequestLoggingMiddleware → outermost (sees every request + final status code)
+# CORSMiddleware           → outermost (handles preflight requests)
+# RequestLoggingMiddleware → sees every request + final status code
 # RateLimiterMiddleware    → before auth (rejects floods before Clerk API calls)
 # AuthMiddleware           → before route handlers
 # RequestIDMiddleware      → innermost (attaches request_id used by logging above)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",      # Next.js dev
+        "http://localhost:5173",      # Vite dev
+        "http://localhost:8000",      # FastAPI dev
+        "https://yourdomain.com",     # Production frontend
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RateLimiterMiddleware)
 app.add_middleware(AuthMiddleware)
