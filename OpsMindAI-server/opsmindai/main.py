@@ -87,6 +87,8 @@ app.add_middleware(
         "http://localhost:3000",      # Next.js dev
         "http://localhost:5173",      # Vite dev
         "http://localhost:8000",      # FastAPI dev
+        "http://127.0.0.1:3000",      # Loopback
+        "http://192.168.10.30:3000",  # Network dev
         "https://yourdomain.com",     # Production frontend
     ],
     allow_credentials=True,

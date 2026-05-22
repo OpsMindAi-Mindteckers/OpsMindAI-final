@@ -19,18 +19,53 @@ interface TestResult {
 export default function ApiConnectionTest() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [isTesting, setIsTesting] = useState(false);
+  const [testToken, setTestToken] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
-  const testEndpoint = async (endpoint: string) => {
+  const getTestToken = async () => {
+    setTokenError(null);
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1';
+      const response = await fetch(`${baseUrl}/auth/test-token`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get test token: ${data.detail || data.message}`);
+      }
+      
+      setTestToken(data.access_token);
+      localStorage.setItem('auth_token', data.access_token);
+      return data.access_token;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      setTokenError(errorMsg);
+      console.error('Failed to get test token:', errorMsg);
+      return null;
+    }
+  };
+
+  const testEndpoint = async (endpoint: string, token: string | null) => {
     const startTime = Date.now();
     try {
-      const response = await apiClient.get(endpoint);
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1';
+      const response = await fetch(`${baseUrl}${endpoint}`, {
+        headers,
+        credentials: 'include',
+      });
+      
       const responseTime = Date.now() - startTime;
+      const data = await response.json().catch(() => ({}));
 
       return {
         endpoint,
-        status: response.error ? 'error' : 'success',
+        status: response.ok ? 'success' : 'error',
         statusCode: response.status,
-        message: response.error ? `Error: ${JSON.stringify(response.error)}` : 'Connected successfully',
+        message: response.ok ? 'Connected successfully' : `Error: ${JSON.stringify(data)}`,
         responseTime,
       };
     } catch (error) {
@@ -48,8 +83,15 @@ export default function ApiConnectionTest() {
     setIsTesting(true);
     setResults([]);
 
+    // First, get a test token
+    const token = await getTestToken();
+    if (!token) {
+      setIsTesting(false);
+      return;
+    }
+
     const endpoints = [
-      '/auth/me',
+      '/users/me',
       '/projects',
       '/agents/sre/history',
       '/agents/testing/history',
@@ -57,7 +99,7 @@ export default function ApiConnectionTest() {
     ];
 
     const testPromises = endpoints.map((endpoint) =>
-      testEndpoint(endpoint).then((result) => {
+      testEndpoint(endpoint, token).then((result) => {
         setResults((prev) => [...prev, result]);
         return result;
       })
@@ -86,21 +128,58 @@ export default function ApiConnectionTest() {
         <p>
           <strong>Backend URL:</strong> {process.env.NEXT_PUBLIC_API_BASE_URL}
         </p>
-        <button
-          onClick={handleTestConnection}
-          disabled={isTesting}
-          style={{
-            padding: '10px 20px',
-            fontSize: '16px',
-            backgroundColor: isTesting ? '#ccc' : '#4CAF50',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isTesting ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {isTesting ? 'Testing...' : 'Test Connection'}
-        </button>
+        
+        {/* Token Status */}
+        <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: testToken ? '#d4edda' : '#fff3cd', borderRadius: '4px', border: '1px solid #ccc' }}>
+          <p>
+            <strong>Test Token Status:</strong>{' '}
+            {testToken ? (
+              <span style={{ color: 'green' }}>✅ Active</span>
+            ) : (
+              <span style={{ color: 'orange' }}>⏳ Not yet fetched</span>
+            )}
+          </p>
+          {tokenError && (
+            <p style={{ color: 'red', margin: '5px 0 0 0' }}>
+              ⚠️ Token Error: {tokenError}
+            </p>
+          )}
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={getTestToken}
+            disabled={isTesting}
+            style={{
+              padding: '10px 20px',
+              fontSize: '16px',
+              backgroundColor: isTesting ? '#ccc' : '#2196F3',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isTesting ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {testToken ? 'Refresh Token' : 'Get Test Token'}
+          </button>
+
+          <button
+            onClick={handleTestConnection}
+            disabled={isTesting || !testToken}
+            style={{
+              padding: '10px 20px',
+              fontSize: '16px',
+              backgroundColor: isTesting || !testToken ? '#ccc' : '#4CAF50',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isTesting || !testToken ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {isTesting ? 'Testing...' : 'Test All Endpoints'}
+          </button>
+        </div>
       </div>
 
       {results.length > 0 && (
@@ -152,7 +231,7 @@ export default function ApiConnectionTest() {
                 server. You're ready to use all the API services in your components.
               </p>
             ) : errorCount > 0 ? (
-              <p>
+              <div>
                 ✗ <strong>Some APIs are not connected.</strong> Check that:
                 <ul>
                   <li>Backend server is running on http://localhost:8000</li>
@@ -160,7 +239,7 @@ export default function ApiConnectionTest() {
                   <li>Backend is properly initialized (database, Redis, etc.)</li>
                   <li>Check browser console (F12) for CORS or network errors</li>
                 </ul>
-              </p>
+              </div>
             ) : (
               <p>Click "Test Connection" to check if APIs are connected.</p>
             )}
