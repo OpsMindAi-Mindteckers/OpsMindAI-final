@@ -8,6 +8,7 @@ structured response into a list of PatchFile objects.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -15,30 +16,85 @@ import textwrap
 from typing import Optional
 
 from opsmindai.schemas.refactor import PatchFile, SmellItem, SmellSeverity
+from opsmindai.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-def _get_hybrid_router():
-    """Lazy load HybridRouter to avoid circular imports.
-    
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Fallback models tried in order when the primary model is rate-limited.
+# These use different upstream providers to avoid the same rate-limit bucket.
+_FALLBACK_MODELS = [
+    "minimax/minimax-m2-her",
+    "deepseek/deepseek-v3.2",
+    "anthropic/claude-3.5-haiku",
+    "meta-llama/llama-3.2-3b-instruct",
+    "openai/gpt-oss-20b",
+]
+
+
+async def _call_openrouter_refactor(
+    system_prompt: str,
+    user_prompt: str,
+    model: Optional[str] = None,
+) -> tuple[str, int]:
+    """Call OpenRouter, falling back through free models if rate-limited.
+
+    Args:
+        model: OpenRouter model ID selected by the user. Falls back to settings.REFACTOR_MODEL.
     Returns:
-        HybridRouter instance.
-        
-    Raises:
-        ImportError: If hybrid_router module is unavailable.
+        Tuple of (response_text, tokens_used).
     """
-    from opsmindai.inference.hybrid_router import HybridRouter
-    return HybridRouter()
+    from openai import AsyncOpenAI  # type: ignore
+
+    if not settings.OPENROUTER_API_KEY:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set. Add it to your .env file."
+        )
+
+    primary = model or settings.REFACTOR_MODEL
+    # Build candidate list: primary first, then unique fallbacks
+    candidates = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
+
+    client = AsyncOpenAI(
+        base_url=_OPENROUTER_BASE_URL,
+        api_key=settings.OPENROUTER_API_KEY,
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_prompt},
+    ]
+
+    last_exc: Exception = RuntimeError("No models available")
+    for i, candidate in enumerate(candidates):
+        logger.info("refactor_engine → OpenRouter model=%s (attempt %d/%d)", candidate, i + 1, len(candidates))
+        try:
+            resp = await client.chat.completions.create(
+                model=candidate,
+                messages=messages,
+                max_tokens=16384,
+            )
+            text        = resp.choices[0].message.content or ""
+            tokens_used = resp.usage.total_tokens if resp.usage else 0
+            if i > 0:
+                logger.info("Succeeded with fallback model %s", candidate)
+            return text, tokens_used
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
+            if status in (429, 503) and i < len(candidates) - 1:
+                logger.warning(
+                    "Model %s rate-limited (%s), trying next fallback: %s",
+                    candidate, status, candidates[i + 1],
+                )
+                await asyncio.sleep(3)   # short pause before trying next model
+                last_exc = exc
+            else:
+                raise
+    raise last_exc
+
 
 def _get_rag_pipeline():
-    """Lazy load RAGPipeline to avoid circular imports.
-    
-    Returns:
-        RAGPipeline instance.
-        
-    Raises:
-        ImportError: If rag_pipeline module is unavailable.
-    """
+    """Lazy load RAGPipeline to avoid circular imports."""
     from opsmindai.memory.rag_pipeline import RAGPipeline
     return RAGPipeline()
 
@@ -46,15 +102,17 @@ def _get_rag_pipeline():
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = textwrap.dedent("""
-You are an expert code refactoring assistant embedded in an automated DevOps platform.
-Your task is to refactor code to eliminate detected code smells while preserving
-exact functional behaviour.
+You are an expert code reviewer and refactoring assistant.
+Your job is to find ALL issues in the provided code — including bugs, logic errors,
+bad practices, missing error handling, code smells, and anything that would cause
+failures or poor behaviour — and produce a fixed version.
 
 RULES:
-1. Only modify lines that directly relate to the reported smells.
+1. Fix every bug, logic error, and code quality issue you can find.
 2. Preserve all function signatures, return types, and public API contracts.
 3. Do NOT add new dependencies or change import structure unless fixing a dead import.
 4. Output ONLY a valid JSON object matching the schema below. No markdown, no explanation.
+5. If you find nothing to fix, still return the JSON with the original source and an explanation saying the code is clean.
 
 OUTPUT SCHEMA:
 {
@@ -65,7 +123,33 @@ OUTPUT SCHEMA:
       "explanation": "<one sentence describing what was changed and why>"
     }
   ],
-  "summary": "<overall refactoring summary in one paragraph>"
+  "summary": "<overall summary of all issues found and fixes applied>"
+}
+""").strip()
+
+_FULL_REVIEW_SYSTEM_PROMPT = textwrap.dedent("""
+You are an expert code reviewer. Perform a thorough review of the provided code.
+Find and fix ALL of the following:
+- Bugs and logic errors
+- Missing or incorrect error handling
+- Security vulnerabilities
+- Performance issues
+- Dead code or unused variables/imports
+- Poor naming or readability issues
+- Anything that would cause test failures or runtime errors
+
+Output ONLY a valid JSON object — no markdown, no explanation outside the JSON.
+
+OUTPUT SCHEMA:
+{
+  "files": [
+    {
+      "file": "<relative file path>",
+      "refactored_source": "<complete refactored file content as a single string>",
+      "explanation": "<description of all issues found and fixes applied>"
+    }
+  ],
+  "summary": "<overall summary of all issues found and fixed>"
 }
 """).strip()
 
@@ -103,11 +187,15 @@ def _build_user_prompt(
         )
     parts.append("")
 
-    # 3. Source files
+    # 3. Source files (cap each file at 8000 chars to stay within context)
     parts.append("=== SOURCE CODE TO REFACTOR ===")
     for file_path, source in file_contents.items():
         parts.append(f"--- {file_path} ---")
-        parts.append(source)
+        if len(source) > 8000:
+            parts.append(source[:8000])
+            parts.append(f"... [truncated {len(source) - 8000} chars]")
+        else:
+            parts.append(source)
         parts.append("")
 
     parts.append("=== INSTRUCTIONS ===")
@@ -116,6 +204,26 @@ def _build_user_prompt(
         "Address ALL smells listed. Return ONLY the JSON object."
     )
 
+    return "\n".join(parts)
+
+
+def _build_full_review_prompt(file_contents: dict[str, str]) -> str:
+    """Build a full code-review prompt when no AST smells were detected."""
+    parts: list[str] = ["=== SOURCE CODE TO REVIEW AND FIX ==="]
+    for file_path, source in file_contents.items():
+        parts.append(f"--- {file_path} ---")
+        if len(source) > 8000:
+            parts.append(source[:8000])
+            parts.append(f"... [truncated {len(source) - 8000} chars]")
+        else:
+            parts.append(source)
+        parts.append("")
+    parts.append("=== INSTRUCTIONS ===")
+    parts.append(
+        "Perform a thorough review. Find and fix every bug, logic error, "
+        "missing error handling, unused import, poor naming, and any other issue. "
+        "Return ONLY the JSON object."
+    )
     return "\n".join(parts)
 
 
@@ -164,17 +272,41 @@ def _parse_llm_response(
     Raises:
         ValueError: If response cannot be parsed as valid JSON.
     """
+    if not raw_response or not raw_response.strip():
+        raise ValueError("LLM returned an empty response")
+
     # Strip markdown code fences if present
     cleaned = re.sub(r"```(?:json)?\s*", "", raw_response).strip()
 
+    data = None
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        # Attempt to extract JSON object with regex
+        # Try to extract a JSON object with regex (handles surrounding text)
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if not match:
-            raise ValueError(f"LLM returned non-JSON response: {raw_response[:300]}")
-        data = json.loads(match.group())
+        if match:
+            try:
+                data = json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+    if data is None:
+        # Response was likely truncated mid-JSON — try to salvage any complete
+        # "files" entries already present before the cut-off point
+        partial_files: list[dict] = []
+        for m in re.finditer(
+            r'\{\s*"file"\s*:\s*"([^"]+)".*?"refactored_source"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
+            cleaned, re.DOTALL,
+        ):
+            try:
+                partial_files.append(json.loads(m.group()))
+            except json.JSONDecodeError:
+                pass
+        if partial_files:
+            logger.warning("LLM response was truncated — salvaged %d partial file(s)", len(partial_files))
+            data = {"files": partial_files}
+        else:
+            raise ValueError(f"LLM returned unparseable response (likely truncated): {raw_response[:300]}")
 
     patches: list[PatchFile] = []
     for file_data in data.get("files", []):
@@ -206,68 +338,58 @@ async def generate_refactor(
     file_contents:      dict[str, str],
     smells:             list[SmellItem],
     language:           str = "python",
-    skip_low_severity:  bool = True,
+    skip_low_severity:  bool = False,
+    model:              Optional[str] = None,
 ) -> tuple[list[PatchFile], int, str]:
     """
-    Generate refactor patches for detected smells using the hybrid LLM router.
+    Generate refactor patches via OpenRouter.
 
-    Args:
-        file_contents:     { file_path: raw_source } for all files to refactor.
-        smells:            Detected smell list from smell_detector.py.
-        language:          Primary language (for context).
-        skip_low_severity: If True, omit LOW severity smells from LLM prompt.
+    When smells are detected, sends them alongside the source for targeted fixes.
+    When no smells are detected, performs a full code review and bug-fix pass.
 
     Returns:
         (patches, tokens_used, model_name)
     """
-    # Filter smells for prompt (don't waste tokens on LOW unless requested)
     prompt_smells = smells
     if skip_low_severity:
-        prompt_smells = [s for s in smells
-                         if s.severity != SmellSeverity.LOW]
+        prompt_smells = [s for s in smells if s.severity != SmellSeverity.LOW]
 
-    if not prompt_smells:
-        logger.info("No significant smells to refactor — skipping LLM call")
-        return [], 0, "none"
-
-    # ── RAG context retrieval ────────────────────────────────────
-    rag = _get_rag_pipeline()
-    smell_summary = "; ".join(
-        f"{s.smell_type} in {s.file}:{s.line}" for s in prompt_smells[:5]
-    )
-    rag_contexts: list[str] = []
-    try:
-        rag_results = await rag.retrieve(
-            query=f"refactor {smell_summary}",
-            doc_type="refactor_pattern",
-            top_k=3,
+    # ── Choose prompt mode ────────────────────────────────────────
+    if prompt_smells:
+        # Smell-driven mode: include RAG context + smell report
+        rag = _get_rag_pipeline()
+        smell_summary = "; ".join(
+            f"{s.smell_type} in {s.file}:{s.line}" for s in prompt_smells[:5]
         )
-        rag_contexts = [r["content"] for r in rag_results]
-        logger.info("RAG retrieved %d refactor patterns", len(rag_contexts))
-    except Exception as exc:
-        logger.warning("RAG retrieval failed (continuing without context): %s", exc)
+        rag_contexts: list[str] = []
+        try:
+            rag_results = await rag.retrieve(
+                query=f"refactor {smell_summary}",
+                doc_type="refactor_pattern",
+                top_k=3,
+            )
+            rag_contexts = [r["content"] for r in rag_results]
+            logger.info("RAG retrieved %d refactor patterns", len(rag_contexts))
+        except Exception as exc:
+            logger.warning("RAG retrieval failed (continuing without context): %s", exc)
 
-    # ── Build prompt ─────────────────────────────────────────────
-    user_prompt = _build_user_prompt(file_contents, prompt_smells, rag_contexts)
+        user_prompt  = _build_user_prompt(file_contents, prompt_smells, rag_contexts)
+        system_prompt = _SYSTEM_PROMPT
+        logger.info("refactor_engine: smell-driven mode (%d smells)", len(prompt_smells))
+    else:
+        # Full-review mode: no AST smells found — let the LLM find everything
+        user_prompt  = _build_full_review_prompt(file_contents)
+        system_prompt = _FULL_REVIEW_SYSTEM_PROMPT
+        logger.info("refactor_engine: full-review mode (no AST smells detected)")
 
-    # ── Hybrid router call ───────────────────────────────────────
-    router = _get_hybrid_router()
-    total_tokens = sum(len(s.split()) for s in file_contents.values()) + len(user_prompt.split())
-
+    # ── OpenRouter inference call ────────────────────────────────
     try:
-        response = await router.infer(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            task_type="refactor",
-            estimated_tokens=total_tokens,
-        )
+        raw_text, tokens_used = await _call_openrouter_refactor(system_prompt, user_prompt, model)
     except Exception as exc:
-        logger.exception("LLM inference failed in refactor_engine")
-        raise RuntimeError(f"LLM inference failed: {exc}") from exc
+        logger.exception("OpenRouter inference failed in refactor_engine")
+        raise RuntimeError(f"OpenRouter inference failed: {exc}") from exc
 
-    raw_text    = response["text"]
-    tokens_used = response.get("tokens_used", 0)
-    model_used  = response.get("model", "unknown")
+    model_used = model or settings.REFACTOR_MODEL
 
     logger.info(
         "Refactor LLM call complete: model=%s tokens=%d",

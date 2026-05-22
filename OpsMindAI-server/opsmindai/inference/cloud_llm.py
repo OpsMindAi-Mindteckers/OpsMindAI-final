@@ -1,11 +1,12 @@
 """
 opsmindai/inference/cloud_llm.py
 
-Cloud LLM client — Anthropic (Claude) or OpenAI (GPT-4o) (SRS §6.5).
+Cloud LLM client — Anthropic (Claude), OpenAI (GPT-4o), or Mistral (SRS §6.5).
 
 Provider is selected via CLOUD_LLM_PROVIDER env var:
   - 'anthropic'  → claude-sonnet-4-6
   - 'openai'     → gpt-4o
+  - 'mistral'    → uses MISTRAL_REFACTOR_MODEL (default: mistralai/voxtral-mini-transcribe)
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ async def generate(prompt: str, system: Optional[str] = None) -> str:
         return await _call_anthropic(prompt, system)
     if provider == "openai":
         return await _call_openai(prompt, system)
+    if provider == "openrouter":
+        return await _call_openrouter(prompt, system)
     raise RuntimeError(f"Unknown CLOUD_LLM_PROVIDER: {provider!r}")
 
 
@@ -94,6 +97,32 @@ async def _call_openai(prompt: str, system: Optional[str]) -> str:
     return resp.choices[0].message.content or ""
 
 
+async def _call_openrouter(prompt: str, system: Optional[str]) -> str:
+    """Call OpenRouter with the configured REFACTOR_MODEL using the OpenAI SDK."""
+    from openai import AsyncOpenAI  # type: ignore
+
+    if not settings.OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
+
+    model = settings.REFACTOR_MODEL
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=settings.OPENROUTER_API_KEY,
+    )
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    logger.debug("cloud_llm openrouter model=%s", model)
+    resp = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=4096,
+    )
+    return resp.choices[0].message.content or ""
+
+
 async def is_available() -> bool:
     """
     Send a minimal probe to verify cloud API reachability.
@@ -115,4 +144,6 @@ def get_model_name() -> str:
         return f"anthropic/{_ANTHROPIC_MODEL}"
     if provider == "openai":
         return f"openai/{_OPENAI_MODEL}"
+    if provider == "openrouter":
+        return settings.REFACTOR_MODEL
     return f"{provider}/unknown"

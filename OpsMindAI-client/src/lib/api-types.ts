@@ -294,7 +294,50 @@ export interface TestingHistory {
   page_size: number;
 }
 
+// ==================== Agent Types ====================
+
+export interface AgentInfo {
+  name: string;
+  status: string;
+  description?: string;
+  version?: string;
+  metrics?: {
+    jobs_total?: number;
+    jobs_success?: number;
+    jobs_failed?: number;
+    avg_duration_s?: number;
+  };
+}
+
+export interface AgentListResponse {
+  agents: AgentInfo[];
+}
+
 // ==================== Refactor Types ====================
+
+export interface RefactorAnalyzeRequest {
+  repo_url: string;
+  branch?: string;
+  file_paths?: string[];
+  severity_threshold?: string;
+  model?: string;
+}
+
+export interface RefactorSuggestRequest {
+  repo_url: string;
+  branch?: string;
+  source_job_id: string;
+  model?: string;
+}
+
+export interface RefactorApplyRequest {
+  repo_url: string;
+  branch?: string;
+  source_job_id: string;
+  pr_title?: string;
+  pr_body?: string;
+  draft?: boolean;
+}
 
 export interface RefactorRequest {
   repo_url: string;
@@ -304,19 +347,61 @@ export interface RefactorRequest {
   pr_number?: number;
 }
 
+export interface RefactorSmell {
+  smell_type: string;
+  file_path: string;
+  line_start?: number;
+  line_end?: number;
+  description: string;
+  severity?: string;
+  original_code?: string;
+}
+
+export interface RefactorSuggestion {
+  smell_type: string;
+  file_path: string;
+  line_start?: number;
+  line_end?: number;
+  description: string;
+  severity?: string;
+  original_code?: string;
+  refactored_code?: string;
+  explanation?: string;
+  patch?: string;
+}
+
 export interface RefactorJobStatus {
   job_id: string;
   status: string;
+  phase?: string;
   error?: string;
   created_at?: string;
   completed_at?: string;
   duration_s?: number;
   pr_url?: string;
+  smells?: RefactorSmell[];
+  suggestions?: RefactorSuggestion[];
   changes_summary?: {
     files_modified: number;
     smells_detected: number;
     smells_fixed: number;
   };
+}
+
+export interface RefactorSuggestResponse {
+  job_id: string;
+  status: string;
+  suggestions: RefactorSuggestion[];
+  summary?: string;
+  total_smells?: number;
+  message?: string;
+}
+
+export interface RefactorApplyResponse {
+  job_id: string;
+  pr_url?: string;
+  status: string;
+  message: string;
 }
 
 export interface RefactorHistory {

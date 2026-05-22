@@ -396,6 +396,10 @@ class AnalyzeRequest(BaseModel):
         pattern="^(low|medium|high|critical)$",
         description="Minimum severity to report",
     )
+    model: Optional[str] = Field(
+        None,
+        description="OpenRouter model ID to use (e.g. mistralai/voxtral-mini-transcribe). Falls back to REFACTOR_MODEL env var.",
+    )
 
 
 class SuggestRequest(BaseModel):
@@ -403,6 +407,10 @@ class SuggestRequest(BaseModel):
     branch: str = Field("main")
     source_job_id: str = Field(
         ..., description="job_id from a completed /analyze job"
+    )
+    model: Optional[str] = Field(
+        None,
+        description="OpenRouter model ID to use. Falls back to REFACTOR_MODEL env var.",
     )
 
 
@@ -703,6 +711,7 @@ async def submit_analysis(
         "user_id":    user.id,
         "repo_url":   body.repo_url,
         "branch":     body.branch,
+        "file_paths": body.file_paths,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
@@ -782,20 +791,18 @@ async def submit_suggest(
         )
 
     smells = source_state.get("smells", [])
-    if not smells:
-        raise HTTPException(
-            status_code=400,
-            detail="Source analysis job found no smells — nothing to suggest",
-        )
+    file_paths = source_state.get("file_paths", [])
 
     job_id = str(uuid.uuid4())
     payload = {
         "repo_url":      body.repo_url,
         "branch":        body.branch,
         "smells":        smells,
+        "file_paths":    file_paths,
         "source_job_id": body.source_job_id,
         "user_id":       user.id,
         "phase":         "suggest",
+        "model":         body.model,
     }
 
     await _set_job(redis, job_id, {

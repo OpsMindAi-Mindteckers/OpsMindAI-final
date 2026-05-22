@@ -7,3 +7,4 @@ export { projectsService } from './projects-service';
 export { sreService } from './sre-service';
 export { testingService } from './testing-service';
 export { usersService } from './users-service';
+export { refactorService } from './refactor-service';

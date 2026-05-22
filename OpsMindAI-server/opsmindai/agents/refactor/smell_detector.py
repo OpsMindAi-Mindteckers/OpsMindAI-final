@@ -35,13 +35,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SmellThresholds:
-    max_complexity:     int   = 10    # cyclomatic complexity — McCabe threshold
-    max_method_lines:   int   = 50    # lines per function body
-    max_params:         int   = 5     # parameters per function
-    max_nesting:        int   = 4     # nesting depth
-    max_class_methods:  int   = 20    # methods per class (god class)
+    max_complexity:     int   = 5     # cyclomatic complexity — McCabe threshold
+    max_method_lines:   int   = 20    # lines per function body
+    max_params:         int   = 3     # parameters per function
+    max_nesting:        int   = 2     # nesting depth
+    max_class_methods:  int   = 10    # methods per class (god class)
     min_name_length:    int   = 3     # minimum identifier length
-    duplication_window: int   = 6     # consecutive identical lines = duplicate
+    duplication_window: int   = 4     # consecutive identical lines = duplicate
 
 
 DEFAULT_THRESHOLDS = SmellThresholds()

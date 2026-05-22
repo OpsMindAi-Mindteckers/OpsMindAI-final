@@ -54,9 +54,11 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.80   # route to cloud below this
 
     # ── LLM — cloud ───────────────────────────────────────────────────────────
-    CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai
+    CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai | mistral
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
+    OPENROUTER_API_KEY: str = "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"
+    REFACTOR_MODEL:     str = "deepseek/deepseek-v4-flash:free"
 
     # ── Vector store ──────────────────────────────────────────────────────────
     VECTOR_STORE:   str = "chromadb"              # chromadb | qdrant

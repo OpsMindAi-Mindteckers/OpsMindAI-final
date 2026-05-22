@@ -107,7 +107,7 @@ def _read_files_from_repo(
     """
     work_dir = tempfile.mkdtemp(prefix="opsmind_ast_")
     try:
-        auth_url = repo_url.replace("https://", f"https://{token}@")
+        auth_url = repo_url.replace("https://", f"https://{token}@") if token else repo_url
         subprocess.run(
             ["git", "clone", "--depth=1", "--branch", branch, auth_url, work_dir],
             check=True, capture_output=True,
@@ -226,18 +226,26 @@ async def run_suggest(job_id: str, payload: dict, redis) -> None:
         branch     = payload.get("branch", "main")
         smells_raw = payload.get("smells", [])
         smells     = [SmellItem(**s) for s in smells_raw]
+        model      = payload.get("model") or None
 
-        if not smells:
-            raise ValueError("No smells provided for refactor suggestion.")
+        # Determine which files to read:
+        # - if smells detected → use the files those smells came from
+        # - if no smells → fall back to the original file_paths from the analyze job
+        if smells:
+            smell_files = list({s.file for s in smells})
+        else:
+            smell_files = payload.get("file_paths", [])
 
-        # Re-read only the files that have smells
-        smell_files = list({s.file for s in smells})
+        if not smell_files:
+            raise ValueError("No files to review — provide file_paths in the analyze request.")
+
         file_contents = _read_files_from_repo(repo_url, branch, smell_files, token)
 
         # LLM refactor generation
         patches, tokens_used, model_used = await generate_refactor(
             file_contents=file_contents,
             smells=smells,
+            model=model,
         )
 
         duration = time.monotonic() - start
