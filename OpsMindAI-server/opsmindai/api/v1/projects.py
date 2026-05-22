@@ -107,7 +107,12 @@ async def list_projects(
     status: Optional[str] = Query(None, description="Filter by status")
 ):
     """List all projects for current user"""
-    pass
+    return ProjectListResponse(
+        projects=[],
+        total=0,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("", response_model=CreateProjectResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -117,7 +122,7 @@ async def create_project(
     """
     Create a new project and trigger full pipeline.
     
-    This is the core endpoint. Accepts a natural language prompt and dispatches 
+    This is the corepoint. Accepts a natural language prompt and dispatches 
     the multi-agent build pipeline asynchronously.
     """
     pass
