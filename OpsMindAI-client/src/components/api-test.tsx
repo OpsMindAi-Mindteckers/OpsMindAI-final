@@ -95,7 +95,7 @@ export default function ApiConnectionTest() {
       '/projects',
       '/agents/sre/history',
       '/agents/testing/history',
-      '/users',
+      '/users/me/api-keys',
     ];
 
     const testPromises = endpoints.map((endpoint) =>
