@@ -261,7 +261,13 @@ async def get_current_user(
 
     user_id: Optional[str] = None
 
-    if sid:
+    # ── DEVELOPMENT MODE: Skip Clerk verification for test tokens ──
+    is_test_token = user_id_from_token.startswith("test_") or (sid and sid.startswith("test_"))
+    
+    if is_test_token:
+        print(f"[auth] 🧪 TEST TOKEN DETECTED — skipping Clerk verification")
+        user_id = user_id_from_token
+    elif sid:
         async with httpx.AsyncClient(timeout=10) as c:
             sr = await c.get(f"{CLERK_API}/sessions/{sid}", headers=_headers())
         if sr.status_code >= 400:
@@ -291,20 +297,27 @@ async def get_current_user(
     if not user_id:
         raise HTTPException(401, "Could not determine user_id")
 
-    # Load local user row — auto-provision for OAuth users
+    # Load local user row — auto-provision for OAuth/test users
     res = await db.execute(select(User).where(User.id == user_id))
     user = res.scalar_one_or_none()
 
     if not user:
         print(f"[auth] auto-provisioning user {user_id}")
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(f"{CLERK_API}/users/{user_id}", headers=_headers())
-        if r.status_code != 200:
-            raise HTTPException(401, "User not found on Clerk")
-        cu = r.json()
-        emails = cu.get("email_addresses") or []
-        email = emails[0].get("email_address", "") if emails else ""
-        full_name = cu.get("first_name", "") + " " + cu.get("last_name", "")
+        
+        # For test users, skip Clerk lookup
+        if is_test_token:
+            email = f"{user_id}@test.local"
+            full_name = "Test User"
+        else:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{CLERK_API}/users/{user_id}", headers=_headers())
+            if r.status_code != 200:
+                raise HTTPException(401, "User not found on Clerk")
+            cu = r.json()
+            emails = cu.get("email_addresses") or []
+            email = emails[0].get("email_address", "") if emails else ""
+            full_name = cu.get("first_name", "") + " " + cu.get("last_name", "")
+        
         user = User(id=user_id, email=email, full_name=full_name.strip() or None)
         db.add(user)
         await db.commit()
@@ -316,6 +329,50 @@ async def get_current_user(
 
     user.__dict__["_sid"] = sid
     return user
+
+
+
+# ---------- Test/Dev Endpoints ----------
+@router.get("/test-token", tags=["auth"])
+async def get_test_token(db: AsyncSession = Depends(get_db)):
+    """
+    🧪 DEVELOPMENT ONLY: Generate a test JWT token without authentication.
+    This endpoint is used for testing the API without Clerk setup.
+    Returns a valid token that can be used as Bearer token for other endpoints.
+    """
+    test_user_id = "test_user_dev"
+    test_session_id = "test_session_dev"
+    
+    # Create a valid JWT token (without Clerk verification)
+    payload = {
+        "sub": test_user_id,
+        "sid": test_session_id,
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    token = jwt.encode(payload, settings.API_SECRET_KEY or "dev-secret", algorithm="HS256")
+    
+    # Auto-provision test user in database
+    res = await db.execute(select(User).where(User.id == test_user_id))
+    user = res.scalar_one_or_none()
+    if not user:
+        user = User(
+            id=test_user_id,
+            email="test@example.com",
+            full_name="Test User",
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        print(f"[test-token] auto-provisioned test user {test_user_id}")
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "test_user": test_user_id,
+        "message": "🧪 Test token generated. Use as: Authorization: Bearer {access_token}",
+    }
 
 
 # ---------- Endpoints ----------

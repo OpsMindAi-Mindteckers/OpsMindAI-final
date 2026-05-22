@@ -72,7 +72,10 @@ def _decode_token(token: str) -> Optional[dict]:
     except Exception:
         return None
 
-
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "http://localhost:3000",
+    "Access-Control-Allow-Credentials": "true",
+}
 class AuthMiddleware(BaseHTTPMiddleware):
     """
     Starlette middleware that enforces token presence on all protected routes.
@@ -89,6 +92,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
         path = request.url.path
 
         if _should_skip(path):
@@ -102,10 +107,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             logger.warning(
                 "auth middleware: missing token path=%s ip=%s",
                 path, request.client.host if request.client else "unknown",
+                
             )
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Missing Bearer token or auth cookie"},
+                headers=_CORS_HEADERS,
             )
 
         claims = _decode_token(token)
@@ -114,6 +121,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Malformed token"},
+                headers=_CORS_HEADERS,
             )
 
         # Attach cheap claims to state — full verification by get_current_user
