@@ -40,11 +40,13 @@ class JobStatus(str, Enum):
 class SmellItem(BaseModel):
     file:       str           = Field(..., description="Relative file path")
     line:       int           = Field(..., description="Line number where the smell starts")
+    end_line:   Optional[int] = Field(None, description="Line number where the smell ends")
     smell_type: SmellType     = Field(..., description="Category of code smell")
     severity:   SmellSeverity = Field(..., description="Severity level")
     message:    str           = Field(..., description="Human-readable description")
     symbol:     Optional[str] = Field(None, description="Function / class name affected")
     score:      float         = Field(0.0,  description="Numeric severity score")
+    context:    Optional[str] = Field(None, description="Short source snippet around the smell")
 
     model_config = {"use_enum_values": True}
 

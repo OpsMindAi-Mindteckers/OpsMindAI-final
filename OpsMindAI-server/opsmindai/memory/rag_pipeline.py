@@ -144,3 +144,7 @@ class RAGPipeline:
     async def add_results(self, content: str, metadata: dict) -> None:
         doc_type = metadata.get("type", "pattern")
         await store_result(content, doc_type, metadata)
+
+    async def embed(self, content: str, doc_type: str = "pattern", metadata: dict | None = None) -> None:
+        """Alias for add_results with a positional doc_type arg (matches agent.py call signature)."""
+        await store_result(content, doc_type, metadata or {})

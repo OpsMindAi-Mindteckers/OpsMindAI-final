@@ -25,11 +25,11 @@ _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # Fallback models tried in order when the primary model is rate-limited.
 # These use different upstream providers to avoid the same rate-limit bucket.
 _FALLBACK_MODELS = [
-    "minimax/minimax-m2-her",
-    "deepseek/deepseek-v3.2",
-    "anthropic/claude-3.5-haiku",
-    "meta-llama/llama-3.2-3b-instruct",
-    "openai/gpt-oss-20b",
+    "deepseek/deepseek-v4-flash:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openai/gpt-oss-120b:free",
 ]
 
 
@@ -55,11 +55,17 @@ async def _call_openrouter_refactor(
     # Emergency free-tier models — appended last so they are tried only when every
     # configured model fails with 402/429/503 (zero-credit account safety net).
     _FREE_EMERGENCY_FALLBACKS = [
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "deepseek/deepseek-v4-flash:free",
-        "google/gemma-4-31b-it:free",
-        "nousresearch/hermes-3-llama-3.1-405b:free",
-        "mistralai/mistral-7b-instruct:free",
+        "openai/gpt-oss-20b",
+        "minimax/minimax-m2.5",
+        "nousresearch/hermes-3-llama-3.1-405b",
+        "meta-llama/llama-3.2-3b-instruct",
+        "meta-llama/llama-3.3-70b-instruct",
+        "nvidia/nemotron-3-super-120b-a12b",
+        "openai/gpt-oss-120b",
+        "minimax/minimax-m2.5:free",
+        "minimax/minimax-m2.5",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "nvidia/nemotron-3-nano-30b-a3b"
     ]
 
     primary = model or settings.REFACTOR_MODEL
@@ -97,8 +103,8 @@ async def _call_openrouter_refactor(
             return text, tokens_used
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
-            # 429=rate-limited, 402=insufficient credits, 503=unavailable — try next model
-            if status in (429, 402, 503) and i < len(candidates) - 1:
+            # 404=model not found, 429=rate-limited, 402=insufficient credits, 503=unavailable — try next model
+            if status in (404, 429, 402, 503) and i < len(candidates) - 1:
                 logger.warning(
                     "Model %s unavailable (%s), trying next candidate [%d/%d]: %s",
                     candidate, status, i + 2, len(candidates), candidates[i + 1],
