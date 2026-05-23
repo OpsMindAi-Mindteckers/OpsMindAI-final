@@ -143,8 +143,27 @@ def detect_smells(
 
     for ast_result in ast_results:
         if ast_result.parse_error and not ast_result.functions and not ast_result.classes:
-            logger.warning("Skipping %s — parse error: %s",
-                           ast_result.file_path, ast_result.parse_error)
+            logger.warning(
+                "Parse error for %s (%s) — adding structural smell so LLM reviews it",
+                ast_result.file_path, ast_result.parse_error,
+            )
+            # Instead of silently skipping, inject a HIGH smell so this file
+            # is included in the suggest phase's file_contents and reviewed by
+            # the LLM.  Typical cause: commented-out class/function declarations.
+            if severity_order[SmellSeverity.HIGH] >= min_severity:
+                smells.append(SmellItem(
+                    file=ast_result.file_path,
+                    line=1,
+                    smell_type=SmellType.DEAD_CODE,
+                    severity=SmellSeverity.HIGH,
+                    message=(
+                        f"File has structural issues that prevented full AST parsing "
+                        f"({ast_result.parse_error}). Possible causes: commented-out "
+                        f"class/function declarations, orphaned method bodies, or "
+                        f"syntax errors. Review the entire file for structural bugs."
+                    ),
+                    score=0.85,
+                ))
             continue
 
         lang = ast_result.language
