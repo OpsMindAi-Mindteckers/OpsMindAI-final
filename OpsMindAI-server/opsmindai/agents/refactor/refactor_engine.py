@@ -52,9 +52,25 @@ async def _call_openrouter_refactor(
             "OPENROUTER_API_KEY is not set. Add it to your .env file."
         )
 
+    # Emergency free-tier models — appended last so they are tried only when every
+    # configured model fails with 402/429/503 (zero-credit account safety net).
+    _FREE_EMERGENCY_FALLBACKS = [
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-v4-flash:free",
+        "google/gemma-4-31b-it:free",
+        "nousresearch/hermes-3-llama-3.1-405b:free",
+        "mistralai/mistral-7b-instruct:free",
+    ]
+
     primary = model or settings.REFACTOR_MODEL
-    # Build candidate list: primary first, then unique fallbacks
-    candidates = [primary] + [m for m in _FALLBACK_MODELS if m != primary]
+    # Build candidate list: primary first, then unique configured fallbacks,
+    # then emergency free-tier models that never require purchased credits.
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for m in [primary] + _FALLBACK_MODELS + _FREE_EMERGENCY_FALLBACKS:
+        if m not in seen:
+            seen.add(m)
+            candidates.append(m)
 
     client = AsyncOpenAI(
         base_url=_OPENROUTER_BASE_URL,
@@ -72,7 +88,7 @@ async def _call_openrouter_refactor(
             resp = await client.chat.completions.create(
                 model=candidate,
                 messages=messages,
-                max_tokens=16384,
+                max_tokens=4096,
             )
             text        = resp.choices[0].message.content or ""
             tokens_used = resp.usage.total_tokens if resp.usage else 0
@@ -81,12 +97,13 @@ async def _call_openrouter_refactor(
             return text, tokens_used
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(exc, "status_code", None)
-            if status in (429, 503) and i < len(candidates) - 1:
+            # 429=rate-limited, 402=insufficient credits, 503=unavailable — try next model
+            if status in (429, 402, 503) and i < len(candidates) - 1:
                 logger.warning(
-                    "Model %s rate-limited (%s), trying next fallback: %s",
-                    candidate, status, candidates[i + 1],
+                    "Model %s unavailable (%s), trying next candidate [%d/%d]: %s",
+                    candidate, status, i + 2, len(candidates), candidates[i + 1],
                 )
-                await asyncio.sleep(3)   # short pause before trying next model
+                await asyncio.sleep(1)
                 last_exc = exc
             else:
                 raise
@@ -114,6 +131,14 @@ RULES:
 4. Output ONLY a valid JSON object matching the schema below. No markdown, no explanation.
 5. If you find nothing to fix, still return the JSON with the original source and an explanation saying the code is clean.
 
+COMMON BUG PATTERNS TO LOOK FOR:
+- Commented-out class or function declarations (e.g. `//class Foo {`) that break the file structure
+- Incorrect spread operators (e.g. `{ obj, ...updates }` instead of `{ ...obj, ...updates }`)
+- Logic inversions in filter/comparison operators (e.g. `===` where `!==` is needed)
+- Commented-out logic inside methods (e.g. a filter callback that is fully commented out)
+- Overly complex methods that can be dramatically simplified
+- Unused variables that are set but never read
+
 OUTPUT SCHEMA:
 {
   "files": [
@@ -130,7 +155,11 @@ OUTPUT SCHEMA:
 _FULL_REVIEW_SYSTEM_PROMPT = textwrap.dedent("""
 You are an expert code reviewer. Perform a thorough review of the provided code.
 Find and fix ALL of the following:
-- Bugs and logic errors
+- Bugs and logic errors (especially commented-out declarations, logic inversions, wrong operators)
+- Commented-out class/function declarations that break file structure (e.g. `//class Foo {`)
+- Incorrect object spreads (e.g. `{ obj, ...updates }` should be `{ ...obj, ...updates }`)
+- Inverted filter logic (e.g. `=== tag` in a "remove tag" filter that should be `!== tag`)
+- Commented-out callback bodies inside methods that make them always return empty results
 - Missing or incorrect error handling
 - Security vulnerabilities
 - Performance issues
@@ -278,6 +307,27 @@ def _parse_llm_response(
     # Strip markdown code fences if present
     cleaned = re.sub(r"```(?:json)?\s*", "", raw_response).strip()
 
+    # Detect plain-text "code is clean" responses from models that ignored JSON instructions
+    _NO_ISSUES_PHRASES = (
+        "no refactoring is required",
+        "no refactoring required",
+        "no changes are needed",
+        "no changes needed",
+        "code is already clean",
+        "code looks clean",
+        "already clean",
+        "already maintainable",
+        "nothing to fix",
+        "no issues found",
+        "no bugs found",
+        "code is clean",
+        "looks good",
+    )
+    lowered = cleaned.lower()
+    if not cleaned.startswith("{") and any(p in lowered for p in _NO_ISSUES_PHRASES):
+        logger.info("LLM indicated no refactoring needed (plain-text response) — returning 0 patches")
+        return []
+
     data = None
     try:
         data = json.loads(cleaned)
@@ -306,6 +356,10 @@ def _parse_llm_response(
             logger.warning("LLM response was truncated — salvaged %d partial file(s)", len(partial_files))
             data = {"files": partial_files}
         else:
+            # Last resort: if response mentions no issues, return clean rather than crash
+            if any(p in lowered for p in _NO_ISSUES_PHRASES):
+                logger.info("Unparseable response but indicates clean code — returning 0 patches")
+                return []
             raise ValueError(f"LLM returned unparseable response (likely truncated): {raw_response[:300]}")
 
     patches: list[PatchFile] = []
@@ -365,10 +419,9 @@ async def generate_refactor(
         try:
             rag_results = await rag.retrieve(
                 query=f"refactor {smell_summary}",
-                doc_type="refactor_pattern",
                 top_k=3,
             )
-            rag_contexts = [r["content"] for r in rag_results]
+            rag_contexts = [r.content if hasattr(r, "content") else r.get("content", "") for r in rag_results]
             logger.info("RAG retrieved %d refactor patterns", len(rag_contexts))
         except Exception as exc:
             logger.warning("RAG retrieval failed (continuing without context): %s", exc)

@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai | mistral
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
-    OPENROUTER_API_KEY: str = "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"
-    REFACTOR_MODEL:     str = "deepseek/deepseek-v4-flash:free"
+    OPENROUTER_API_KEY: str = "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"
+    REFACTOR_MODEL:     str = "meta-llama/llama-3.3-70b-instruct:free"
 
     # ── Vector store ──────────────────────────────────────────────────────────
     VECTOR_STORE:   str = "chromadb"              # chromadb | qdrant

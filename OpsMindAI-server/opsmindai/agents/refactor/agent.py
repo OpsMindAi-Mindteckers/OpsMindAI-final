@@ -229,12 +229,21 @@ async def run_suggest(job_id: str, payload: dict, redis) -> None:
         model      = payload.get("model") or None
 
         # Determine which files to read:
-        # - if smells detected → use the files those smells came from
-        # - if no smells → fall back to the original file_paths from the analyze job
+        # - Always start with every file path recorded by the analyze job.
+        # - When smells exist, put smell files first so they get priority context.
+        # - Files that had AST parse errors (e.g. commented-out class declarations)
+        #   are represented by a DEAD_CODE smell and are therefore already in
+        #   the smell set; including all file_paths ensures nothing is silently
+        #   excluded regardless of smell coverage.
+        all_file_paths: list[str] = payload.get("file_paths", [])
         if smells:
-            smell_files = list({s.file for s in smells})
+            smell_file_set = {s.file for s in smells}
+            # Smell files first (they're the priority for the LLM), then the rest
+            smell_files = list(smell_file_set) + [
+                f for f in all_file_paths if f not in smell_file_set
+            ]
         else:
-            smell_files = payload.get("file_paths", [])
+            smell_files = all_file_paths
 
         if not smell_files:
             raise ValueError("No files to review — provide file_paths in the analyze request.")

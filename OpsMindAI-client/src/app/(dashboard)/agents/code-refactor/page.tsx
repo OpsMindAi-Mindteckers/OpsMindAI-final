@@ -114,16 +114,14 @@ export default function CodeRefactorPage() {
             return;
         }
         setStep("suggesting");
-        try {
-            await suggest({
-                repo_url: repoUrl,
-                branch,
-                source_job_id: result.job_id,
-                model: selectedModel,
-            });
-        } catch {
-            // suggest failed — analysis results are still shown below
-        }
+        await suggest({
+            repo_url: repoUrl,
+            branch,
+            source_job_id: result.job_id,
+            model: selectedModel,
+        }).catch(() => {
+            // error is already stored in hook state — shown in done panel
+        });
         setStep("done");
     }
 
@@ -602,13 +600,28 @@ export default function CodeRefactorPage() {
                 </motion.div>
             )}
 
-            {/* Done — no suggestions */}
-            {step === "done" && suggestionList.length === 0 && !suggestLoading && (
+            {/* Done — error from suggest job */}
+            {step === "done" && suggestionList.length === 0 && !suggestLoading && error && (
+                <motion.div variants={itemVariants}>
+                    <Card className="bg-rose-500/5 border-rose-500/20">
+                        <CardContent className="p-6 flex items-start gap-3">
+                            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                                <p className="text-sm font-medium text-rose-400">Refactor suggestion failed</p>
+                                <p className="text-xs text-rose-300/70">{error}</p>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </motion.div>
+            )}
+
+            {/* Done — no suggestions, no error */}
+            {step === "done" && suggestionList.length === 0 && !suggestLoading && !error && (
                 <motion.div variants={itemVariants}>
                     <Card className="bg-card border-white/5">
                         <CardContent className="p-6 flex items-center gap-3 text-emerald-400">
                             <CheckCircle2 className="w-5 h-5 shrink-0" />
-                            <p className="text-sm">No refactor suggestions — your code looks clean!</p>
+                            <p className="text-sm">No refactor suggestions — the LLM reviewed your code and found no issues to fix.</p>
                         </CardContent>
                     </Card>
                 </motion.div>
