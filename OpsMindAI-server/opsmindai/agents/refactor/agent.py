@@ -269,10 +269,9 @@ async def run_suggest(job_id: str, payload: dict, redis) -> None:
             rag = RAGPipeline()
             patch_summary = "; ".join(f"{p.file}: +{p.additions} -{p.deletions}" for p in patches)
             smell_summary = "; ".join(f"{s.smell_type}@{s.file}:{s.line}" for s in smells[:5])
-            await rag.embed(
+            await rag.add_results(
                 content=f"Refactor job {job_id}. Smells: {smell_summary}. Patches: {patch_summary}",
-                doc_type="refactor_pattern",
-                metadata={"job_id": job_id, "repo": repo_url, "files": smell_files},
+                metadata={"type": "refactor_pattern", "job_id": job_id, "repo": repo_url, "files": smell_files},
             )
         except Exception as exc:
             logger.warning("RAG embed failed (non-fatal): %s", exc)

@@ -26,7 +26,7 @@ celery_app = Celery(
     include=[
         "opsmindai.tasks.refactor_tasks",
         "opsmindai.tasks.sre_tasks",
-        # "opsmindai.tasks.testing_tasks",   # add when Phase P4 lands
+        # "opsmindai.tasks.testing_tasks",  # uncomment when testing agent is deployed
     ],
 )
 

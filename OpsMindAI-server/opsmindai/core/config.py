@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai | mistral
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
-    OPENROUTER_API_KEY: str = "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"
+    OPENROUTER_API_KEY: str = ""  # Set via .env
     REFACTOR_MODEL:     str = "meta-llama/llama-3.3-70b-instruct:free"
 
     # ── Vector store ──────────────────────────────────────────────────────────
