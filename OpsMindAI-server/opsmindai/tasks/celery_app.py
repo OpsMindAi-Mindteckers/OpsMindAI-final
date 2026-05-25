@@ -27,6 +27,7 @@ celery_app = Celery(
         "opsmindai.tasks.refactor_tasks",
         "opsmindai.tasks.sre_tasks",
         "opsmindai.tasks.testing_tasks",
+        "opsmindai.tasks.pipeline_tasks",
     ],
 )
 
@@ -56,6 +57,7 @@ celery_app.conf.update(
         "refactor": {"exchange": "refactor", "routing_key": "refactor"},
         "sre":      {"exchange": "sre",      "routing_key": "sre"},
         "testing":  {"exchange": "testing",  "routing_key": "testing"},
+        "pipeline": {"exchange": "pipeline", "routing_key": "pipeline"},
         "default":  {"exchange": "default",  "routing_key": "default"},
     },
 
