@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -8,15 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-    Eye,
-    EyeOff,
-    Mail,
-    Lock,
-    User,
-    ArrowRight,
-    Cpu,
-    Check,
+    Eye, EyeOff, Mail, Lock, User, ArrowRight, Cpu, Check, Loader2,
 } from "lucide-react";
+import { useOAuth } from "@/lib/hooks/use-oauth";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 const GithubIcon = ({ className }: { className?: string }) => (
     <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -25,21 +22,59 @@ const GithubIcon = ({ className }: { className?: string }) => (
 );
 
 export default function SignupPage() {
-    const [showPassword, setShowPassword] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
-    const [step, setStep] = useState(1);
+    const router = useRouter();
+    const { startOAuth } = useOAuth();
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (step === 1) {
-            setStep(2);
-            return;
+    const [showPassword, setShowPassword]   = useState(false);
+    const [isLoading, setIsLoading]         = useState(false);
+    const [oauthLoading, setOauthLoading]   = useState<"github" | "google" | null>(null);
+    const [step, setStep]                   = useState(1);
+    const [name, setName]                   = useState("");
+    const [email, setEmail]                 = useState("");
+    const [password, setPassword]           = useState("");
+    const [confirmPassword, setConfirm]     = useState("");
+    const [error, setError]                 = useState<string | null>(null);
+
+    async function handleOAuth(provider: "github" | "google") {
+        setError(null);
+        setOauthLoading(provider);
+        try {
+            await startOAuth(provider === "github" ? "oauth_github" : "oauth_google");
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setError(`${provider} sign-up failed: ${msg}`);
+            setOauthLoading(null);
         }
+    }
+
+    async function handleSubmit(e: React.FormEvent) {
+        e.preventDefault();
+        if (step === 1) { setStep(2); return; }
+
+        if (password !== confirmPassword) { setError("Passwords do not match."); return; }
         setIsLoading(true);
-        setTimeout(() => {
-            window.location.href = "/dashboard";
-        }, 1500);
-    };
+        setError(null);
+
+        try {
+            const res = await fetch(`${API_BASE}/auth/register`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ email, password, username: name.split(" ")[0].toLowerCase() }),
+            });
+            const data = await res.json();
+            if (!res.ok) { setError(data.detail ?? "Registration failed."); setIsLoading(false); return; }
+
+            if (data.access_token) localStorage.setItem("auth_token", data.access_token);
+            const profile = { name, email, role: "DevOps Engineer" };
+            localStorage.setItem("opsmind_profile", JSON.stringify(profile));
+            window.dispatchEvent(new Event("opsmind_profile_update"));
+            router.push("/dashboard");
+        } catch {
+            setError("Cannot reach the server. Please check your connection.");
+            setIsLoading(false);
+        }
+    }
 
     return (
         <div className="flex min-h-screen items-center justify-center px-4">
@@ -97,19 +132,37 @@ export default function SignupPage() {
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                         >
+                            {error && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+                                    className="mb-3 px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm"
+                                >
+                                    {error}
+                                </motion.div>
+                            )}
                             <div className="grid grid-cols-2 gap-3">
                                 <Button
+                                    type="button"
                                     variant="outline"
-                                    className="bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/30 transition-all duration-300 text-white"
+                                    disabled={oauthLoading !== null}
+                                    onClick={() => handleOAuth("github")}
+                                    className="bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/30 transition-all duration-300 text-white disabled:opacity-60"
                                 >
-                                    <GithubIcon className="w-4 h-4 mr-2" />
+                                    {oauthLoading === "github"
+                                        ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        : <GithubIcon className="w-4 h-4 mr-2" />}
                                     GitHub
                                 </Button>
                                 <Button
+                                    type="button"
                                     variant="outline"
-                                    className="bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/30 transition-all duration-300 text-white"
+                                    disabled={oauthLoading !== null}
+                                    onClick={() => handleOAuth("google")}
+                                    className="bg-white/5 border-white/10 hover:bg-white/10 hover:border-violet-500/30 transition-all duration-300 text-white disabled:opacity-60"
                                 >
-                                    <Mail className="w-4 h-4 mr-2" />
+                                    {oauthLoading === "google"
+                                        ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        : <Mail className="w-4 h-4 mr-2" />}
                                     Google
                                 </Button>
                             </div>
@@ -147,6 +200,8 @@ export default function SignupPage() {
                                             id="name"
                                             type="text"
                                             placeholder="John Doe"
+                                            value={name}
+                                            onChange={e => setName(e.target.value)}
                                             className="pl-10 bg-white/5 border-white/10 focus:border-violet-500/50 focus:ring-violet-500/20 text-white placeholder:text-muted-foreground transition-all duration-300 h-11"
                                             required
                                         />
@@ -163,6 +218,8 @@ export default function SignupPage() {
                                             id="email"
                                             type="email"
                                             placeholder="you@company.com"
+                                            value={email}
+                                            onChange={e => setEmail(e.target.value)}
                                             className="pl-10 bg-white/5 border-white/10 focus:border-violet-500/50 focus:ring-violet-500/20 text-white placeholder:text-muted-foreground transition-all duration-300 h-11"
                                             required
                                         />
@@ -187,6 +244,8 @@ export default function SignupPage() {
                                             id="password"
                                             type={showPassword ? "text" : "password"}
                                             placeholder="Create a strong password"
+                                            value={password}
+                                            onChange={e => setPassword(e.target.value)}
                                             className="pl-10 pr-10 bg-white/5 border-white/10 focus:border-violet-500/50 focus:ring-violet-500/20 text-white placeholder:text-muted-foreground transition-all duration-300 h-11"
                                             required
                                         />
@@ -217,6 +276,8 @@ export default function SignupPage() {
                                             id="confirmPassword"
                                             type="password"
                                             placeholder="Confirm your password"
+                                            value={confirmPassword}
+                                            onChange={e => setConfirm(e.target.value)}
                                             className="pl-10 bg-white/5 border-white/10 focus:border-violet-500/50 focus:ring-violet-500/20 text-white placeholder:text-muted-foreground transition-all duration-300 h-11"
                                             required
                                         />
@@ -248,6 +309,15 @@ export default function SignupPage() {
                                         </Link>
                                     </Label>
                                 </div>
+                            </motion.div>
+                        )}
+
+                        {step === 2 && error && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+                                className="px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm"
+                            >
+                                {error}
                             </motion.div>
                         )}
 
