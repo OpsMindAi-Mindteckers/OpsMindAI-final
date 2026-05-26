@@ -243,6 +243,7 @@ export interface GenerateTestRequest {
   framework?: string;
   coverage_threshold?: number;
   pr_number?: number;
+  model?: string;
 }
 
 export interface SuiteRequest {

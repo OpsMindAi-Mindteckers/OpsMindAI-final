@@ -1,444 +1,953 @@
 "use client";
 
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-    TestTube2, CheckCircle2, XCircle, Clock, Play,
-    BarChart3, FileCheck,
-    History, RefreshCw, Loader2,
-    Link2, Globe, FlaskConical, Zap,
+    TestTube2,
+    CheckCircle2,
+    XCircle,
+    Clock,
+    Play,
+    BarChart3,
+    FileCheck,
+    ChevronDown,
+    ChevronRight,
+    RotateCw,
+    RefreshCw,
+    Activity,
+    GitBranch,
+    Shield,
+    Zap,
+    AlertTriangle,
+    ArrowRight,
+    Terminal,
+    Cpu,
+    FileText,
+    FlaskConical,
+    Bug,
+    TrendingUp,
+    Info,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useState, useCallback, useEffect } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useTesting } from "@/lib/hooks/use-testing";
+import { testingService } from "@/lib/services/testing-service";
+import type { TestingJobStatus } from "@/lib/api-types";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-type Tab = "standalone" | "history";
-
-interface JobRecord {
-    job_id: string;
-    phase: string;
-    status: string;
-    created_at?: string;
-    coverage?: number;
-    failures?: number;
-}
-
-type TestType = "integration" | "e2e" | "smoke" | "performance" | "api";
-
-interface StandaloneResult {
-    type: string;
-    status: "passed" | "failed" | "running";
-    duration?: string;
-    tests?: { name: string; status: "passed" | "failed"; duration: string }[];
-    error?: string;
-    summary?: string;
-    coverage?: number;
-    responseTime?: string;
-}
-
-// ── Test type config ───────────────────────────────────────────────────────────
-
-const TEST_TYPES: { value: TestType; label: string; icon: React.ElementType; desc: string; color: string }[] = [
-    { value: "integration", label: "Integration",  icon: Link2,       desc: "Test service interactions",     color: "text-cyan-400"    },
-    { value: "e2e",         label: "End-to-End",   icon: Globe,       desc: "Full user workflow tests",       color: "text-violet-400"  },
-    { value: "smoke",       label: "Smoke",        icon: Zap,         desc: "Quick sanity checks",            color: "text-amber-400"   },
-    { value: "performance", label: "Performance",  icon: BarChart3,   desc: "Load & latency testing",         color: "text-rose-400"    },
-    { value: "api",         label: "API",          icon: FlaskConical,desc: "REST / GraphQL endpoint tests",  color: "text-emerald-400" },
+// ── Free models list (same set as code-refactor) ─────────────────────────────
+const OPENROUTER_FREE_MODELS = [
+     { id: "openrouter/free",                          label: "Free Router",            provider: "OpenRouter" },
+    { id: "openai/gpt-oss-120b:free",                  label: "GPT OSS 120B",          provider: "OpenAI" },
+    { id: "openai/gpt-oss-20b:free",                   label: "GPT OSS 20B",            provider: "OpenAI" },
+    { id: "qwen/qwen3-coder:free",                     label: "Qwen3 Coder",            provider: "Qwen" },
+    { id: "deepseek/deepseek-v4-flash:free",           label: "DeepSeek V4 Flash",      provider: "DeepSeek" },
+    { id: "meta-llama/llama-3.3-70b-instruct:free",    label: "Llama 3.3 70B",          provider: "Meta" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free",    label: "Nemotron Super 120B",    provider: "NVIDIA" },
+    { id: "google/gemma-4-31b-it:free",                label: "Gemma 4 31B",            provider: "Google" },
+    { id: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 405B",          provider: "NousResearch" },
+    { id: "minimax/minimax-m2.5:free",                 label: "MiniMax M2.5",           provider: "MiniMax" },
+    { id: "openrouter/free",                          label: "Free Router",            provider: "OpenRouter" },
+    { id: "arcee-ai/trinity-large-thinking:free",      label: "Trinity Thinking",       provider: "Arcee AI" },
 ];
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+// ── Animation variants ────────────────────────────────────────────────────────
+const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: { opacity: 1, transition: { staggerChildren: 0.08 } },
+};
+const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: { opacity: 1, y: 0 },
+};
 
-const container = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.08 } } };
-const item      = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
-
-function authHeaders(): Record<string, string> {
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
-    const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) h["Authorization"] = `Bearer ${token}`;
-    return h;
+// ── Status helpers ────────────────────────────────────────────────────────────
+function statusColor(status: string) {
+    switch (status?.toLowerCase()) {
+        case "completed":
+        case "generation_complete": return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+        case "running": return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+        case "queued":
+        case "pending": return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+        case "failed":
+        case "error": return "bg-rose-500/10 text-rose-400 border-rose-500/20";
+        default: return "bg-white/5 text-muted-foreground border-white/10";
+    }
+}
+function statusDot(status: string) {
+    switch (status?.toLowerCase()) {
+        case "completed":
+        case "generation_complete": return "bg-emerald-400";
+        case "running": return "bg-cyan-400 animate-pulse";
+        case "queued":
+        case "pending": return "bg-amber-400 animate-pulse";
+        case "failed": return "bg-rose-400";
+        default: return "bg-white/20";
+    }
+}
+function isTerminal(status: string) {
+    return ["completed", "failed", "error", "generation_complete"].includes(status?.toLowerCase());
 }
 
-function simulateStandaloneResult(type: TestType, url: string): Promise<StandaloneResult> {
-    return new Promise(resolve => {
-        setTimeout(() => {
-            const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
-            const resultsByType: Record<TestType, StandaloneResult> = {
-                integration: {
-                    type: "Integration", status: "passed", duration: "3.2s", coverage: 87,
-                    tests: [
-                        { name: `${host} — auth service handshake`,    status: "passed", duration: "245ms" },
-                        { name: `${host} — db connection pool`,         status: "passed", duration: "89ms"  },
-                        { name: `${host} — message queue connectivity`, status: "passed", duration: "134ms" },
-                        { name: `${host} — cache layer response`,       status: "passed", duration: "56ms"  },
-                    ],
-                    summary: "All 4 integration checks passed. Services are communicating correctly.",
-                },
-                e2e: {
-                    type: "End-to-End", status: "passed", duration: "12.4s",
-                    tests: [
-                        { name: "User can sign up and log in",       status: "passed", duration: "3.1s" },
-                        { name: "User can complete checkout flow",    status: "passed", duration: "4.8s" },
-                        { name: "Admin can manage user accounts",     status: "passed", duration: "2.9s" },
-                        { name: "Notification emails are delivered",  status: "failed", duration: "1.6s" },
-                    ],
-                    summary: "3/4 E2E scenarios passed. Email delivery requires attention.",
-                },
-                smoke: {
-                    type: "Smoke", status: "passed", duration: "0.8s",
-                    tests: [
-                        { name: `GET ${url}/health → 200`, status: "passed", duration: "45ms" },
-                        { name: `GET ${url}/api  → 200`,   status: "passed", duration: "38ms" },
-                        { name: `GET ${url}/     → 200`,   status: "passed", duration: "29ms" },
-                    ],
-                    summary: "Smoke tests passed. Core endpoints are responding.",
-                },
-                performance: {
-                    type: "Performance", status: "passed", duration: "30.0s", responseTime: "124ms",
-                    tests: [
-                        { name: "p50 latency < 100ms",  status: "passed", duration: "—" },
-                        { name: "p95 latency < 500ms",  status: "passed", duration: "—" },
-                        { name: "Throughput > 200 rps", status: "passed", duration: "—" },
-                        { name: "Error rate < 1%",      status: "passed", duration: "—" },
-                    ],
-                    summary: "Performance targets met. p95 = 380ms, throughput = 312 rps.",
-                },
-                api: {
-                    type: "API", status: "passed", duration: "5.6s",
-                    tests: [
-                        { name: "POST /api/auth/login — 200", status: "passed", duration: "112ms" },
-                        { name: "GET  /api/users/me  — 200",  status: "passed", duration: "67ms"  },
-                        { name: "POST /api/orders    — 201",  status: "passed", duration: "198ms" },
-                        { name: "DELETE /api/items/1 — 403",  status: "passed", duration: "43ms"  },
-                        { name: "GET  /api/unknown   — 404",  status: "passed", duration: "28ms"  },
-                    ],
-                    summary: "All 5 API endpoint tests passed. Status codes are correct.",
-                },
-            };
-            resolve(resultsByType[type]);
-        }, 2500 + Math.random() * 1500);
-    });
+// ── Phase label ───────────────────────────────────────────────────────────────
+function phaseLabel(phase?: string) {
+    switch (phase) {
+        case "generation": return "Phase 1 — Generating Tests";
+        case "suite_execution": return "Phase 2 — Running Suite";
+        case "regression": return "Phase 3 — Regression Suite";
+        default: return phase ?? "—";
+    }
 }
-
-// ── Component ──────────────────────────────────────────────────────────────────
 
 export default function TestingAgentPage() {
-    const [tab, setTab] = useState<Tab>("standalone");
+    const { generateTests, runTestSuite, buildRegressionSuite, isLoading, error } = useTesting();
 
-    // Standalone state
-    const [standaloneUrl, setStandaloneUrl]         = useState("");
-    const [standaloneType, setStandaloneType]       = useState<TestType>("integration");
-    const [standaloneRunning, setStandaloneRunning] = useState(false);
-    const [standaloneResult, setStandaloneResult]   = useState<StandaloneResult | null>(null);
-    const [standaloneMsg, setStandaloneMsg]         = useState<{ type: "ok" | "err"; text: string } | null>(null);
+    // ── Phase 1 form state ────────────────────────────────────────────────────
+    const [repoUrl, setRepoUrl] = useState("");
+    const [filePath, setFilePath] = useState("");
+    const [branch, setBranch] = useState("main");
+    const [framework, setFramework] = useState<"pytest" | "jest">("pytest");
+    const [threshold, setThreshold] = useState(0.8);
+    const [prNumber, setPrNumber] = useState("");
+    const [selectedModel, setSelectedModel] = useState(OPENROUTER_FREE_MODELS[0].id);
 
-    // History
-    const [history, setHistory]               = useState<JobRecord[]>([]);
-    const [historyLoading, setHistoryLoading] = useState(false);
+    // ── Phase 3 regression form ───────────────────────────────────────────────
+    const [regRepoUrl, setRegRepoUrl] = useState("");
+    const [regBranch, setRegBranch] = useState("main");
+    const [triggerType, setTriggerType] = useState("incident");
+    const [incidentId, setIncidentId] = useState("");
 
-    // ── Standalone Test ────────────────────────────────────────────────────────
-    async function handleStandaloneRun() {
-        if (!standaloneUrl.trim()) return;
-        setStandaloneRunning(true);
-        setStandaloneResult(null);
-        setStandaloneMsg(null);
+    // ── Job tracking state ────────────────────────────────────────────────────
+    const [genJobId, setGenJobId] = useState<string | null>(null);
+    const [genJobStatus, setGenJobStatus] = useState<TestingJobStatus | null>(null);
+    const [suiteJobId, setSuiteJobId] = useState<string | null>(null);
+    const [suiteJobStatus, setSuiteJobStatus] = useState<TestingJobStatus | null>(null);
+    const [regJobId, setRegJobId] = useState<string | null>(null);
+    const [regJobStatus, setRegJobStatus] = useState<TestingJobStatus | null>(null);
 
-        try {
-            const res = await fetch(`${API_BASE}/agents/testing/suite`, {
-                method: "POST",
-                headers: authHeaders(),
-                credentials: "include",
-                body: JSON.stringify({
-                    repo_url:           standaloneUrl,
-                    branch:             "main",
-                    framework:          standaloneType,
-                    coverage_threshold: 0.70,
-                    test_type:          standaloneType,
-                }),
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setStandaloneMsg({ type: "ok", text: `Job submitted: ${data.job_id?.slice(0, 10) ?? ""}` });
+    const [expandedFile, setExpandedFile] = useState<string | null>(null);
+    const [agentStatus, setAgentStatus] = useState<string>("idle");
+    const [agentStatusLoading, setAgentStatusLoading] = useState(false);
+
+    // ── Polling refs ──────────────────────────────────────────────────────────
+    const genPollRef = useRef<NodeJS.Timeout | null>(null);
+    const suitePollRef = useRef<NodeJS.Timeout | null>(null);
+    const regPollRef = useRef<NodeJS.Timeout | null>(null);
+
+    const pollJob = useCallback(async (
+        jobId: string,
+        setter: (s: TestingJobStatus) => void,
+        ref: React.MutableRefObject<NodeJS.Timeout | null>
+    ) => {
+        const status = await testingService.getJobStatus(jobId);
+        if (status) {
+            setter(status);
+            if (isTerminal(status.status)) {
+                if (ref.current) clearInterval(ref.current);
+                ref.current = null;
+                setAgentStatus("idle");
             }
-        } catch { /* fall through to simulation */ }
-
-        const result = await simulateStandaloneResult(standaloneType, standaloneUrl);
-        setStandaloneResult(result);
-        setStandaloneRunning(false);
-    }
-
-    // ── History ────────────────────────────────────────────────────────────────
-    const fetchHistory = useCallback(async () => {
-        setHistoryLoading(true);
-        try {
-            const res = await fetch(`${API_BASE}/agents/testing/history`, {
-                headers: authHeaders(), credentials: "include",
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setHistory(data.jobs ?? []);
-            } else {
-                setHistory([]);
-            }
-        } catch {
-            setHistory([]);
-        } finally {
-            setHistoryLoading(false);
         }
     }, []);
 
-    useEffect(() => { if (tab === "history") fetchHistory(); }, [tab, fetchHistory]);
+    // Auto-poll generation job
+    useEffect(() => {
+        if (!genJobId) return;
+        genPollRef.current = setInterval(() => pollJob(genJobId, setGenJobStatus, genPollRef), 2000);
+        return () => { if (genPollRef.current) clearInterval(genPollRef.current); };
+    }, [genJobId, pollJob]);
+
+    // Auto-poll suite job
+    useEffect(() => {
+        if (!suiteJobId) return;
+        suitePollRef.current = setInterval(() => pollJob(suiteJobId, setSuiteJobStatus, suitePollRef), 2000);
+        return () => { if (suitePollRef.current) clearInterval(suitePollRef.current); };
+    }, [suiteJobId, pollJob]);
+
+    // Auto-poll regression job
+    useEffect(() => {
+        if (!regJobId) return;
+        regPollRef.current = setInterval(() => pollJob(regJobId, setRegJobStatus, regPollRef), 2000);
+        return () => { if (regPollRef.current) clearInterval(regPollRef.current); };
+    }, [regJobId, pollJob]);
+
+    // ── Phase 1: Generate ─────────────────────────────────────────────────────
+    async function handleGenerate() {
+        if (!repoUrl.trim()) return;
+        setAgentStatus("running");
+        setGenJobStatus(null);
+        setSuiteJobStatus(null);
+        const result = await generateTests({
+            repo_url: repoUrl.trim(),
+            file_path: filePath.trim() || undefined,
+            branch: branch.trim() || "main",
+            framework,
+            coverage_threshold: threshold,
+            pr_number: prNumber ? parseInt(prNumber) : undefined,
+            model: selectedModel,
+        });
+        if (result?.job_id) {
+            setGenJobId(result.job_id);
+            setGenJobStatus({ job_id: result.job_id, status: "queued", phase: "generation" });
+        } else {
+            setAgentStatus("idle");
+        }
+    }
+
+    // ── Phase 2: Run Suite ────────────────────────────────────────────────────
+    async function handleRunSuite() {
+        if (!genJobId) return;
+        setAgentStatus("running");
+        setSuiteJobStatus(null);
+        const result = await runTestSuite({
+            generation_job_id: genJobId,
+            pr_number: prNumber ? parseInt(prNumber) : undefined,
+        });
+        if (result?.job_id) {
+            setSuiteJobId(result.job_id);
+            setSuiteJobStatus({ job_id: result.job_id, status: "queued", phase: "suite_execution" });
+        } else {
+            setAgentStatus("idle");
+        }
+    }
+
+    // ── Phase 3: Regression ───────────────────────────────────────────────────
+    async function handleRegression() {
+        if (!regRepoUrl.trim()) return;
+        setAgentStatus("running");
+        setRegJobStatus(null);
+        const result = await buildRegressionSuite({
+            repo_url: regRepoUrl.trim(),
+            branch: regBranch.trim() || "main",
+            trigger_event: {
+                type: triggerType,
+                ...(incidentId ? { incident_id: incidentId } : {}),
+            },
+        });
+        if (result?.job_id) {
+            setRegJobId(result.job_id);
+            setRegJobStatus({ job_id: result.job_id, status: "queued", phase: "regression" });
+        } else {
+            setAgentStatus("idle");
+        }
+    }
+
+    function handleReset() {
+        if (genPollRef.current) clearInterval(genPollRef.current);
+        if (suitePollRef.current) clearInterval(suitePollRef.current);
+        setGenJobId(null); setGenJobStatus(null);
+        setSuiteJobId(null); setSuiteJobStatus(null);
+        setAgentStatus("idle");
+    }
+
+    const genComplete = genJobStatus?.status === "generation_complete" || genJobStatus?.status === "completed";
+    const coveragePct = suiteJobStatus?.coverage?.coverage_pct ?? 0;
+    const gatePassed = suiteJobStatus?.gate_passed;
 
     return (
-        <motion.div variants={container} initial="hidden" animate="visible" className="space-y-6">
-
-            {/* ── Header ─────────────────────────────────────────────────── */}
-            <motion.div variants={item} className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-                    <TestTube2 className="w-6 h-6 text-violet-400" />
+        <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="space-y-6"
+        >
+            {/* ── Header ──────────────────────────────────────────────────── */}
+            <motion.div variants={itemVariants} className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                        <TestTube2 className="w-6 h-6 text-violet-400" />
+                    </div>
+                    <div>
+                        <h1 className="text-2xl font-bold text-white">Testing Agent</h1>
+                        <p className="text-muted-foreground text-sm">
+                            Generate test stubs, enforce coverage gates & build regression suites
+                        </p>
+                    </div>
                 </div>
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Testing Agent</h1>
-                    <p className="text-muted-foreground text-sm">
-                        Standalone URL testing &amp; job history
-                    </p>
+                <div className="flex items-center gap-2">
+                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium ${statusColor(agentStatus)}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${statusDot(agentStatus)}`} />
+                        {agentStatus.charAt(0).toUpperCase() + agentStatus.slice(1)}
+                    </div>
                 </div>
             </motion.div>
 
-            {/* ── Tabs ───────────────────────────────────────────────────── */}
-            <motion.div variants={item} className="flex gap-1 bg-white/5 border border-white/8 rounded-xl p-1 w-fit">
-                {([
-                    { key: "standalone", label: "Standalone Test", icon: FlaskConical },
-                    { key: "history",    label: "Job History",     icon: History      },
-                ] as { key: Tab; label: string; icon: React.ElementType }[]).map(t => (
-                    <button
-                        key={t.key}
-                        onClick={() => setTab(t.key)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t.key ? "bg-white/10 text-white shadow" : "text-muted-foreground hover:text-white"}`}
+            {/* ── Error banner ─────────────────────────────────────────────── */}
+            <AnimatePresence>
+                {error && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="flex items-center gap-3 px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm"
                     >
-                        <t.icon className="w-4 h-4" />
-                        {t.label}
-                    </button>
-                ))}
-            </motion.div>
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>{error}</span>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-            {/* ══════════════════ STANDALONE TAB ════════════════════ */}
-            {tab === "standalone" && (
-                <>
-                    <motion.div variants={item}>
+            {/* ── Main Tabs ─────────────────────────────────────────────────── */}
+            <motion.div variants={itemVariants}>
+                <Tabs defaultValue="generate">
+                    <TabsList className="bg-white/5 border border-white/10 mb-6">
+                        <TabsTrigger value="generate" className="data-[state=active]:bg-violet-500/20 data-[state=active]:text-violet-300">
+                            <FlaskConical className="w-4 h-4 mr-2" /> Phase 1 — Generate
+                        </TabsTrigger>
+                        <TabsTrigger value="suite" className="data-[state=active]:bg-violet-500/20 data-[state=active]:text-violet-300">
+                            <Shield className="w-4 h-4 mr-2" /> Phase 2 — Suite
+                        </TabsTrigger>
+                        <TabsTrigger value="regression" className="data-[state=active]:bg-violet-500/20 data-[state=active]:text-violet-300">
+                            <Bug className="w-4 h-4 mr-2" /> Phase 3 — Regression
+                        </TabsTrigger>
+                    </TabsList>
+
+                    {/* ══════════════════ PHASE 1 — GENERATE ══════════════════ */}
+                    <TabsContent value="generate" className="space-y-4">
                         <Card className="bg-card border-white/5">
-                            <CardHeader>
-                                <CardTitle className="text-white text-base flex items-center gap-2">
+                            <CardHeader className="pb-4">
+                                <CardTitle className="text-white text-sm flex items-center gap-2">
                                     <FlaskConical className="w-4 h-4 text-violet-400" />
-                                    Standalone URL Test
+                                    Phase 1 — Repository Analysis &amp; Test Generation
                                 </CardTitle>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Clone the repository, analyse source files with the LLM, and write test stubs.
+                                    Leave <code className="bg-white/10 px-1 rounded text-violet-300">File Path</code> empty
+                                    to scan the entire repo.
+                                </p>
                             </CardHeader>
                             <CardContent className="space-y-5">
+                                {/* Repo URL */}
                                 <div className="space-y-1.5">
-                                    <Label className="text-xs text-muted-foreground">Target URL</Label>
-                                    <div className="relative">
-                                        <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                        <Input
-                                            value={standaloneUrl}
-                                            onChange={e => setStandaloneUrl(e.target.value)}
-                                            placeholder="https://api.yourapp.com  or  https://app.vercel.app"
-                                            className="pl-10 bg-white/5 border-white/10 text-white placeholder:text-white/20 h-11"
-                                        />
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground">Paste any cloud URL — Vercel, Render, Railway, custom domain, etc.</p>
+                                    <Label className="text-xs text-muted-foreground">Repository URL *</Label>
+                                    <Input
+                                        placeholder="https://github.com/org/repo"
+                                        value={repoUrl}
+                                        onChange={(e) => setRepoUrl(e.target.value)}
+                                        className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                    />
                                 </div>
 
+                                {/* Row: Branch + File Path */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Branch</Label>
+                                        <Input
+                                            placeholder="main"
+                                            value={branch}
+                                            onChange={(e) => setBranch(e.target.value)}
+                                            className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">File Path (optional)</Label>
+                                        <Input
+                                            placeholder="src/services/auth.py"
+                                            value={filePath}
+                                            onChange={(e) => setFilePath(e.target.value)}
+                                            className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Row: Framework + Threshold + PR */}
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Framework</Label>
+                                        <div className="flex gap-2">
+                                            {(["pytest", "jest"] as const).map((fw) => (
+                                                <button
+                                                    key={fw}
+                                                    onClick={() => setFramework(fw)}
+                                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all ${framework === fw
+                                                        ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                                                        : "bg-white/5 border-white/10 text-muted-foreground hover:border-white/20"
+                                                        }`}
+                                                >
+                                                    {fw}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">
+                                            Coverage Gate: <span className="text-violet-400">{Math.round(threshold * 100)}%</span>
+                                        </Label>
+                                        <input
+                                            type="range" min={0} max={1} step={0.05}
+                                            value={threshold}
+                                            onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                                            className="w-full accent-violet-500 mt-2"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">PR Number (optional)</Label>
+                                        <Input
+                                            placeholder="42"
+                                            value={prNumber}
+                                            onChange={(e) => setPrNumber(e.target.value)}
+                                            className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Model selector */}
                                 <div className="space-y-2">
-                                    <Label className="text-xs text-muted-foreground">Test Type</Label>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-                                        {TEST_TYPES.map(t => (
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                                        <Cpu className="w-3 h-3" /> Model
+                                        <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 text-[10px] px-1.5 py-0.5 rounded-full font-medium">free</span>
+                                    </Label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {OPENROUTER_FREE_MODELS.map((m) => (
                                             <button
-                                                key={t.value}
-                                                type="button"
-                                                onClick={() => setStandaloneType(t.value)}
-                                                className={`p-3 rounded-xl border text-left transition-all ${
-                                                    standaloneType === t.value
-                                                        ? "bg-violet-500/10 border-violet-500/30 shadow-[0_0_12px_rgba(139,92,246,0.1)]"
-                                                        : "bg-white/[0.02] border-white/5 hover:border-white/15"
-                                                }`}
+                                                key={m.id}
+                                                onClick={() => setSelectedModel(m.id)}
+                                                className={`p-2.5 rounded-xl border text-left transition-all ${selectedModel === m.id
+                                                    ? "bg-violet-500/15 border-violet-500/40"
+                                                    : "bg-white/[0.03] border-white/10 hover:border-white/20"
+                                                    }`}
                                             >
-                                                <t.icon className={`w-4 h-4 mb-1.5 ${standaloneType === t.value ? t.color : "text-muted-foreground"}`} />
-                                                <p className="text-xs font-medium text-white">{t.label}</p>
-                                                <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
+                                                <p className="text-xs font-medium text-white leading-tight">{m.label}</p>
+                                                <p className="text-[10px] text-muted-foreground mt-0.5">{m.provider}</p>
+                                                {selectedModel === m.id && (
+                                                    <p className="text-[10px] text-violet-400 mt-0.5 truncate">{m.id}</p>
+                                                )}
                                             </button>
                                         ))}
                                     </div>
                                 </div>
 
-                                <Button
-                                    onClick={handleStandaloneRun}
-                                    disabled={standaloneRunning || !standaloneUrl.trim()}
-                                    className="bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/20 hover:shadow-[0_0_20px_rgba(139,92,246,0.2)] transition-all"
-                                >
-                                    {standaloneRunning
-                                        ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Running {TEST_TYPES.find(t => t.value === standaloneType)?.label} Tests…</>
-                                        : <><Play className="w-4 h-4 mr-2" /> Run {TEST_TYPES.find(t => t.value === standaloneType)?.label} Tests</>}
-                                </Button>
-
-                                {standaloneMsg && (
-                                    <p className="text-xs text-muted-foreground">{standaloneMsg.text}</p>
-                                )}
+                                {/* Submit */}
+                                <div className="flex items-center gap-3 pt-1">
+                                    <Button
+                                        onClick={handleGenerate}
+                                        disabled={!repoUrl.trim() || isLoading || agentStatus === "running"}
+                                        className="bg-violet-500/15 text-violet-300 border border-violet-500/30 hover:bg-violet-500/25 hover:shadow-[0_0_20px_rgba(139,92,246,0.2)] transition-all disabled:opacity-40"
+                                    >
+                                        {isLoading ? (
+                                            <RotateCw className="w-4 h-4 mr-2 animate-spin" />
+                                        ) : (
+                                            <Play className="w-4 h-4 mr-2" />
+                                        )}
+                                        Generate Tests
+                                    </Button>
+                                    {(genJobId || suiteJobId) && (
+                                        <button onClick={handleReset} className="text-xs text-muted-foreground hover:text-white transition-colors">
+                                            Reset
+                                        </button>
+                                    )}
+                                </div>
                             </CardContent>
                         </Card>
-                    </motion.div>
 
-                    {standaloneRunning && (
-                        <motion.div variants={item}>
-                            <Card className="bg-card border-white/5">
-                                <CardContent className="p-6 space-y-3">
-                                    <div className="flex items-center gap-3 text-sm text-white">
-                                        <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
-                                        Running {TEST_TYPES.find(t => t.value === standaloneType)?.label} tests against <span className="text-violet-400 font-mono">{standaloneUrl}</span>…
-                                    </div>
-                                    <div className="space-y-2">
-                                        {[75, 50, 90].map((w, k) => (
-                                            <div key={k} className="h-2 rounded-full bg-white/5 animate-pulse" style={{ width: `${w}%` }} />
-                                        ))}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </motion.div>
-                    )}
-
-                    <AnimatePresence>
-                        {standaloneResult && !standaloneRunning && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 16 }}
-                                className="space-y-4"
-                            >
-                                <Card className={standaloneResult.status === "passed" ? "bg-emerald-500/5 border-emerald-500/20" : "bg-rose-500/5 border-rose-500/20"}>
-                                    <CardContent className="p-4 flex items-start gap-3">
-                                        {standaloneResult.status === "passed"
-                                            ? <CheckCircle2 className="w-5 h-5 text-emerald-400 mt-0.5 shrink-0" />
-                                            : <XCircle className="w-5 h-5 text-rose-400 mt-0.5 shrink-0" />}
-                                        <div className="space-y-1 flex-1">
-                                            <div className="flex items-center gap-3 flex-wrap">
-                                                <span className={`text-sm font-semibold ${standaloneResult.status === "passed" ? "text-emerald-400" : "text-rose-400"}`}>
-                                                    {standaloneResult.type} Tests — {standaloneResult.status === "passed" ? "All Passed" : "Some Failed"}
+                        {/* ── Generation job status ─────────────────────────── */}
+                        <AnimatePresence>
+                            {genJobStatus && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0 }}
+                                >
+                                    <Card className="bg-card border-white/5">
+                                        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                                            <CardTitle className="text-white text-sm flex items-center gap-2">
+                                                <Activity className="w-4 h-4 text-violet-400" />
+                                                Generation Job
+                                                <code className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-muted-foreground">{genJobId}</code>
+                                            </CardTitle>
+                                            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${statusColor(genJobStatus.status)}`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${statusDot(genJobStatus.status)}`} />
+                                                {genJobStatus.status}
+                                            </div>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            {/* Phase + duration */}
+                                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                <span className="flex items-center gap-1.5">
+                                                    <Terminal className="w-3 h-3" />
+                                                    {phaseLabel(genJobStatus.phase)}
                                                 </span>
-                                                {standaloneResult.duration && (
-                                                    <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> {standaloneResult.duration}</span>
-                                                )}
-                                                {standaloneResult.coverage !== undefined && (
-                                                    <Badge className="text-[10px] bg-violet-500/10 text-violet-400 border-violet-500/20">{standaloneResult.coverage}% coverage</Badge>
-                                                )}
-                                                {standaloneResult.responseTime && (
-                                                    <Badge className="text-[10px] bg-cyan-500/10 text-cyan-400 border-cyan-500/20">p95: {standaloneResult.responseTime}</Badge>
+                                                {genJobStatus.duration_s && (
+                                                    <span className="flex items-center gap-1">
+                                                        <Clock className="w-3 h-3" /> {genJobStatus.duration_s.toFixed(1)}s
+                                                    </span>
                                                 )}
                                             </div>
-                                            {standaloneResult.summary && (
-                                                <p className="text-xs text-muted-foreground">{standaloneResult.summary}</p>
-                                            )}
-                                        </div>
-                                        <button
-                                            onClick={() => setStandaloneResult(null)}
-                                            className="text-muted-foreground hover:text-white text-xs px-2 py-1 rounded bg-white/5"
-                                        >
-                                            Clear
-                                        </button>
-                                    </CardContent>
-                                </Card>
 
-                                {standaloneResult.tests && standaloneResult.tests.length > 0 && (
-                                    <Card className="bg-card border-white/5">
-                                        <CardHeader>
-                                            <CardTitle className="text-white text-sm flex items-center gap-2">
-                                                <FileCheck className="w-4 h-4 text-violet-400" />
-                                                Test Results
-                                            </CardTitle>
-                                        </CardHeader>
-                                        <CardContent className="space-y-2">
-                                            {standaloneResult.tests.map((t, k) => (
-                                                <motion.div
-                                                    key={k}
-                                                    initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: k * 0.06 }}
-                                                    className={`flex items-center justify-between p-3 rounded-lg border ${t.status === "passed" ? "bg-emerald-500/5 border-emerald-500/10" : "bg-rose-500/5 border-rose-500/10"}`}
-                                                >
-                                                    <div className="flex items-center gap-2">
-                                                        {t.status === "passed" ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <XCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-                                                        <span className="text-sm text-white">{t.name}</span>
+                                            {/* Running spinner */}
+                                            {!isTerminal(genJobStatus.status) && (
+                                                <div className="flex items-center gap-2 text-xs text-cyan-400">
+                                                    <RotateCw className="w-3 h-3 animate-spin" />
+                                                    Polling for updates...
+                                                </div>
+                                            )}
+
+                                            {/* Error */}
+                                            {genJobStatus.error && (
+                                                <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                                                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                                    <span>{genJobStatus.error}</span>
+                                                </div>
+                                            )}
+
+                                            {/* Generated files */}
+                                            {genComplete && genJobStatus.generated_files && genJobStatus.generated_files.length > 0 && (
+                                                <div className="space-y-2">
+                                                    <p className="text-xs font-medium text-white flex items-center gap-1.5">
+                                                        <FileCheck className="w-3.5 h-3.5 text-emerald-400" />
+                                                        {genJobStatus.generated_files.length} file(s) generated
+                                                    </p>
+                                                    {genJobStatus.generated_files.map((f) => (
+                                                        <button
+                                                            key={f.source_file}
+                                                            onClick={() => setExpandedFile(expandedFile === f.source_file ? null : f.source_file)}
+                                                            className="w-full p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/15 text-left hover:border-emerald-500/25 transition-all"
+                                                        >
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex items-center gap-2">
+                                                                    {expandedFile === f.source_file
+                                                                        ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                                                                        : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
+                                                                    <FileText className="w-3.5 h-3.5 text-violet-400" />
+                                                                    <span className="text-xs text-white font-mono">{f.source_file}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                                                                    <span>{f.functions_processed} fn</span>
+                                                                    <span>{f.tokens_used} tok</span>
+                                                                </div>
+                                                            </div>
+                                                            {expandedFile === f.source_file && (
+                                                                <div className="mt-2 ml-6 space-y-1 text-[10px] text-muted-foreground">
+                                                                    <p>Output: <span className="text-violet-300 font-mono">{f.output_file}</span></p>
+                                                                    <p>Model: <span className="text-cyan-300">{f.model_used}</span></p>
+                                                                </div>
+                                                            )}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* Warnings */}
+                                            {genJobStatus.warnings && genJobStatus.warnings.length > 0 && (
+                                                <div className="space-y-1">
+                                                    {genJobStatus.warnings.map((w, i) => (
+                                                        <div key={i} className="flex items-start gap-2 text-xs text-amber-400">
+                                                            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                                                            <span>{w}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {/* CTA: run suite */}
+                                            {genComplete && (
+                                                <div className="flex items-center gap-3 pt-2 border-t border-white/5">
+                                                    <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                                        Generation complete — run the suite to enforce coverage gate
                                                     </div>
-                                                    <span className="text-xs text-muted-foreground font-mono">{t.duration}</span>
-                                                </motion.div>
-                                            ))}
+                                                    <ArrowRight className="w-3.5 h-3.5 text-muted-foreground ml-auto" />
+                                                </div>
+                                            )}
                                         </CardContent>
                                     </Card>
-                                )}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </>
-            )}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </TabsContent>
 
-            {/* ══════════════════ HISTORY TAB ════════════════════ */}
-            {tab === "history" && (
-                <motion.div variants={item}>
-                    <Card className="bg-card border-white/5">
-                        <CardHeader className="flex flex-row items-center justify-between">
-                            <CardTitle className="text-white text-base flex items-center gap-2">
-                                <History className="w-4 h-4 text-violet-400" />
-                                Testing Job History
-                            </CardTitle>
-                            <Button
-                                onClick={fetchHistory}
-                                disabled={historyLoading}
-                                className="bg-white/5 text-muted-foreground border border-white/10 hover:bg-white/10 text-xs h-8"
-                            >
-                                <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${historyLoading ? "animate-spin" : ""}`} />
-                                Refresh
-                            </Button>
-                        </CardHeader>
-                        <CardContent>
-                            {historyLoading ? (
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
-                                    <Loader2 className="w-4 h-4 animate-spin" /> Loading history…
+                    {/* ══════════════════ PHASE 2 — SUITE ═════════════════════ */}
+                    <TabsContent value="suite" className="space-y-4">
+                        <Card className="bg-card border-white/5">
+                            <CardHeader className="pb-4">
+                                <CardTitle className="text-white text-sm flex items-center gap-2">
+                                    <Shield className="w-4 h-4 text-cyan-400" />
+                                    Phase 2 — Run Test Suite &amp; Enforce Coverage Gate
+                                </CardTitle>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Execute the generated tests against the cloned repo, parse coverage, and enforce the gate.
+                                    Requires a completed Phase 1 job.
+                                </p>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {/* Generation job ID display */}
+                                <div className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10">
+                                    <Terminal className="w-4 h-4 text-violet-400 shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs text-muted-foreground">Generation Job ID</p>
+                                        {genJobId ? (
+                                            <p className="text-sm font-mono text-white truncate">{genJobId}</p>
+                                        ) : (
+                                            <p className="text-xs text-amber-400">
+                                                No generation job yet — run Phase 1 first
+                                            </p>
+                                        )}
+                                    </div>
+                                    {genComplete && (
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                                    )}
                                 </div>
-                            ) : history.length === 0 ? (
-                                <div className="text-center py-12 space-y-3">
-                                    <History className="w-8 h-8 text-muted-foreground/30 mx-auto" />
-                                    <p className="text-sm text-muted-foreground">No test jobs yet.</p>
-                                    <p className="text-xs text-muted-foreground/60">Run a Standalone Test to create jobs.</p>
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {history.map((job, i) => (
-                                        <motion.div
-                                            key={job.job_id}
-                                            initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
-                                            className="flex items-center gap-4 p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-all"
-                                        >
-                                            <div className={`w-2 h-2 rounded-full shrink-0 ${job.status === "completed" ? "bg-emerald-400" : job.status === "running" ? "bg-cyan-400 animate-pulse" : job.status === "failed" ? "bg-rose-400" : "bg-amber-400"}`} />
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2 flex-wrap">
-                                                    <p className="text-sm text-white font-mono">{job.job_id.slice(0, 16)}</p>
-                                                    <Badge className={`text-[10px] border-0 ${job.status === "completed" ? "bg-emerald-500/10 text-emerald-400" : job.status === "failed" ? "bg-rose-500/10 text-rose-400" : "bg-cyan-500/10 text-cyan-400"}`}>{job.status}</Badge>
-                                                    <Badge className="text-[10px] bg-white/5 text-muted-foreground border-0">{job.phase}</Badge>
+
+                                <Button
+                                    onClick={handleRunSuite}
+                                    disabled={!genComplete || isLoading || agentStatus === "running"}
+                                    className="w-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/25 transition-all disabled:opacity-40"
+                                >
+                                    {isLoading ? (
+                                        <RotateCw className="w-4 h-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Play className="w-4 h-4 mr-2" />
+                                    )}
+                                    Run Test Suite
+                                </Button>
+                            </CardContent>
+                        </Card>
+
+                        {/* ── Suite job result ──────────────────────────────── */}
+                        <AnimatePresence>
+                            {suiteJobStatus && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0 }}
+                                    className="space-y-4"
+                                >
+                                    {/* Status card */}
+                                    <Card className="bg-card border-white/5">
+                                        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                                            <CardTitle className="text-white text-sm flex items-center gap-2">
+                                                <Activity className="w-4 h-4 text-cyan-400" />
+                                                Suite Job
+                                                <code className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-muted-foreground">{suiteJobId}</code>
+                                            </CardTitle>
+                                            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${statusColor(suiteJobStatus.status)}`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${statusDot(suiteJobStatus.status)}`} />
+                                                {suiteJobStatus.status}
+                                            </div>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            {!isTerminal(suiteJobStatus.status) && (
+                                                <div className="flex items-center gap-2 text-xs text-cyan-400">
+                                                    <RotateCw className="w-3 h-3 animate-spin" />
+                                                    Executing tests, parsing coverage...
                                                 </div>
-                                            </div>
-                                            <div className="text-right shrink-0">
-                                                {job.coverage !== undefined && (
-                                                    <p className="text-xs text-violet-400">{(job.coverage * 100).toFixed(0)}% coverage</p>
+                                            )}
+                                            {suiteJobStatus.error && (
+                                                <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                                                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                                    <span>{suiteJobStatus.error}</span>
+                                                </div>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+
+                                    {/* Coverage card */}
+                                    {suiteJobStatus.coverage && (
+                                        <Card className={`border ${gatePassed ? "bg-emerald-500/5 border-emerald-500/20" : "bg-rose-500/5 border-rose-500/20"}`}>
+                                            <CardHeader className="pb-3">
+                                                <CardTitle className={`text-sm flex items-center gap-2 ${gatePassed ? "text-emerald-400" : "text-rose-400"}`}>
+                                                    {gatePassed
+                                                        ? <><CheckCircle2 className="w-4 h-4" /> Coverage Gate Passed</>
+                                                        : <><XCircle className="w-4 h-4" /> Coverage Gate Failed</>
+                                                    }
+                                                </CardTitle>
+                                            </CardHeader>
+                                            <CardContent className="space-y-4">
+                                                {/* Big coverage number */}
+                                                <div className="flex items-end gap-3">
+                                                    <span className={`text-5xl font-bold ${gatePassed ? "text-emerald-400" : "text-rose-400"}`}>
+                                                        {coveragePct.toFixed(1)}%
+                                                    </span>
+                                                    <div className="pb-1 text-xs text-muted-foreground space-y-0.5">
+                                                        <p>threshold: <span className="text-white">{(suiteJobStatus.coverage.threshold * 100).toFixed(0)}%</span></p>
+                                                        {suiteJobStatus.coverage.previous_pct !== undefined && (
+                                                            <p className="flex items-center gap-1">
+                                                                <TrendingUp className="w-3 h-3" />
+                                                                prev: {suiteJobStatus.coverage.previous_pct.toFixed(1)}%
+                                                                <span className={suiteJobStatus.coverage.delta_pct >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                                                    ({suiteJobStatus.coverage.delta_pct >= 0 ? "+" : ""}{suiteJobStatus.coverage.delta_pct.toFixed(1)}%)
+                                                                </span>
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* Progress bar */}
+                                                <div className="relative">
+                                                    <Progress
+                                                        value={coveragePct}
+                                                        className={`h-3 ${gatePassed
+                                                            ? "[&>div]:bg-gradient-to-r [&>div]:from-emerald-500 [&>div]:to-cyan-500"
+                                                            : "[&>div]:bg-gradient-to-r [&>div]:from-rose-500 [&>div]:to-orange-500"
+                                                            }`}
+                                                    />
+                                                    {/* Threshold marker */}
+                                                    <div
+                                                        className="absolute top-0 bottom-0 w-0.5 bg-white/40"
+                                                        style={{ left: `${suiteJobStatus.coverage.threshold * 100}%` }}
+                                                    />
+                                                </div>
+
+                                                {/* Lines stats */}
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                                                        <p className="text-xs text-muted-foreground">Lines Covered</p>
+                                                        <p className="text-xl font-bold text-emerald-400 mt-1">
+                                                            {suiteJobStatus.coverage.lines_covered.toLocaleString()}
+                                                        </p>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                                                        <p className="text-xs text-muted-foreground">Total Lines</p>
+                                                        <p className="text-xl font-bold text-white mt-1">
+                                                            {suiteJobStatus.coverage.lines_total.toLocaleString()}
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                {/* Duration */}
+                                                {suiteJobStatus.duration_s && (
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                                                        <Clock className="w-3 h-3" /> Completed in {suiteJobStatus.duration_s.toFixed(1)}s
+                                                    </p>
                                                 )}
-                                                <p className="text-[10px] text-muted-foreground mt-0.5">
-                                                    {job.created_at ? new Date(job.created_at).toLocaleTimeString() : "—"}
-                                                </p>
-                                            </div>
-                                        </motion.div>
+                                            </CardContent>
+                                        </Card>
+                                    )}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </TabsContent>
+
+                    {/* ══════════════════ PHASE 3 — REGRESSION ════════════════ */}
+                    <TabsContent value="regression" className="space-y-4">
+                        <Card className="bg-card border-white/5">
+                            <CardHeader className="pb-4">
+                                <CardTitle className="text-white text-sm flex items-center gap-2">
+                                    <Bug className="w-4 h-4 text-amber-400" />
+                                    Phase 3 — Build Regression Suite
+                                </CardTitle>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Generate incident-driven regression tests, load/stress scenarios, and DB perf assertions.
+                                    Independent of Phase 1 — provide a repo URL directly.
+                                </p>
+                            </CardHeader>
+                            <CardContent className="space-y-5">
+                                {/* Info cards */}
+                                <div className="grid grid-cols-3 gap-3">
+                                    {[
+                                        { icon: Shield, label: "Incident Tests", desc: "Prevent recurrence of past incidents", color: "text-rose-400" },
+                                        { icon: Zap, label: "Load Tests", desc: "Stress scenarios for affected endpoints", color: "text-amber-400" },
+                                        { icon: BarChart3, label: "DB Perf Tests", desc: "Database performance assertions", color: "text-cyan-400" },
+                                    ].map((item) => (
+                                        <div key={item.label} className="p-3 rounded-xl bg-white/[0.03] border border-white/10">
+                                            <item.icon className={`w-4 h-4 ${item.color} mb-2`} />
+                                            <p className="text-xs font-medium text-white">{item.label}</p>
+                                            <p className="text-[10px] text-muted-foreground mt-0.5">{item.desc}</p>
+                                        </div>
                                     ))}
                                 </div>
+
+                                {/* Repo URL */}
+                                <div className="space-y-1.5">
+                                    <Label className="text-xs text-muted-foreground">Repository URL *</Label>
+                                    <Input
+                                        placeholder="https://github.com/org/repo"
+                                        value={regRepoUrl}
+                                        onChange={(e) => setRegRepoUrl(e.target.value)}
+                                        className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                    />
+                                </div>
+
+                                {/* Branch + Trigger Type */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Branch</Label>
+                                        <Input
+                                            placeholder="main"
+                                            value={regBranch}
+                                            onChange={(e) => setRegBranch(e.target.value)}
+                                            className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Trigger Type</Label>
+                                        <div className="flex gap-2">
+                                            {["incident", "deploy", "manual"].map((t) => (
+                                                <button
+                                                    key={t}
+                                                    onClick={() => setTriggerType(t)}
+                                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all ${triggerType === t
+                                                        ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
+                                                        : "bg-white/5 border-white/10 text-muted-foreground hover:border-white/20"
+                                                        }`}
+                                                >
+                                                    {t}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Incident ID */}
+                                {triggerType === "incident" && (
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Incident ID (optional)</Label>
+                                        <Input
+                                            placeholder="inc_abc123"
+                                            value={incidentId}
+                                            onChange={(e) => setIncidentId(e.target.value)}
+                                            className="bg-white/5 border-white/10 text-white placeholder:text-muted-foreground/50 h-9 text-sm"
+                                        />
+                                    </div>
+                                )}
+
+                                <Button
+                                    onClick={handleRegression}
+                                    disabled={!regRepoUrl.trim() || isLoading || agentStatus === "running"}
+                                    className="w-full bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-all disabled:opacity-40"
+                                >
+                                    {isLoading ? (
+                                        <RotateCw className="w-4 h-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Play className="w-4 h-4 mr-2" />
+                                    )}
+                                    Build Regression Suite
+                                </Button>
+                            </CardContent>
+                        </Card>
+
+                        {/* ── Regression result card ────────────────────────── */}
+                        <AnimatePresence>
+                            {regJobStatus && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0 }}
+                                >
+                                    <Card className="bg-card border-white/5">
+                                        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                                            <CardTitle className="text-white text-sm flex items-center gap-2">
+                                                <Activity className="w-4 h-4 text-amber-400" />
+                                                Regression Job
+                                                <code className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-muted-foreground">{regJobId}</code>
+                                            </CardTitle>
+                                            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${statusColor(regJobStatus.status)}`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${statusDot(regJobStatus.status)}`} />
+                                                {regJobStatus.status}
+                                            </div>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            {!isTerminal(regJobStatus.status) && (
+                                                <div className="flex items-center gap-2 text-xs text-amber-400">
+                                                    <RotateCw className="w-3 h-3 animate-spin" />
+                                                    Generating regression suite...
+                                                </div>
+                                            )}
+                                            {regJobStatus.error && (
+                                                <div className="flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                                                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                                    <span>{regJobStatus.error}</span>
+                                                </div>
+                                            )}
+                                            {regJobStatus.status === "completed" && (
+                                                <div className="grid grid-cols-3 gap-3">
+                                                    {[
+                                                        { label: "Incident Tests", value: regJobStatus.incident_tests_count ?? 0, color: "text-rose-400" },
+                                                        { label: "Load Tests", value: regJobStatus.load_tests_count ?? 0, color: "text-amber-400" },
+                                                        { label: "DB Perf Tests", value: regJobStatus.db_perf_tests_count ?? 0, color: "text-cyan-400" },
+                                                    ].map((stat) => (
+                                                        <div key={stat.label} className="p-3 rounded-xl bg-white/5 border border-white/10 text-center">
+                                                            <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                                                            <p className="text-[10px] text-muted-foreground mt-1">{stat.label}</p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {regJobStatus.output_file && (
+                                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                    <FileText className="w-3.5 h-3.5 text-violet-400" />
+                                                    Output: <span className="text-violet-300 font-mono">{regJobStatus.output_file}</span>
+                                                </div>
+                                            )}
+                                            {regJobStatus.model_used && (
+                                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                    <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                                                    Model: <span className="text-cyan-300">{regJobStatus.model_used}</span>
+                                                    {regJobStatus.tokens_used && (
+                                                        <span>· {regJobStatus.tokens_used.toLocaleString()} tokens</span>
+                                                    )}
+                                                </div>
+                                            )}
+                                            {regJobStatus.duration_s && (
+                                                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                                                    <Clock className="w-3 h-3" /> Completed in {regJobStatus.duration_s.toFixed(1)}s
+                                                </p>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+                                </motion.div>
                             )}
-                        </CardContent>
-                    </Card>
-                </motion.div>
-            )}
+                        </AnimatePresence>
+                    </TabsContent>
+                </Tabs>
+            </motion.div>
+
+            {/* ── How it works ─────────────────────────────────────────────── */}
+            <motion.div variants={itemVariants}>
+                <Card className="bg-card border-white/5">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-white text-sm flex items-center gap-2">
+                            <Info className="w-4 h-4 text-violet-400" />
+                            How It Works
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-3 gap-4">
+                            {[
+                                {
+                                    phase: "Phase 1", icon: FlaskConical, color: "text-violet-400 bg-violet-500/10 border-violet-500/20",
+                                    title: "Generate Tests",
+                                    steps: ["Clone repo & scan files", "Extract function signatures via AST", "LLM generates test stubs", "Write to tests/ directory"],
+                                },
+                                {
+                                    phase: "Phase 2", icon: Shield, color: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20",
+                                    title: "Run Suite",
+                                    steps: ["Execute pytest/jest", "Parse coverage XML/JSON", "Enforce coverage gate", "Post PR comment on failure"],
+                                },
+                                {
+                                    phase: "Phase 3", icon: Bug, color: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+                                    title: "Regression Suite",
+                                    steps: ["Load incident history from RAG", "Generate anti-regression tests", "Build load/stress scenarios", "Add DB performance assertions"],
+                                },
+                            ].map((item) => (
+                                <div key={item.phase} className="space-y-3">
+                                    <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${item.color}`}>
+                                        <item.icon className="w-4 h-4" />
+                                        <div>
+                                            <p className="text-xs font-semibold">{item.phase}</p>
+                                            <p className="text-[10px] opacity-80">{item.title}</p>
+                                        </div>
+                                    </div>
+                                    <ul className="space-y-1.5">
+                                        {item.steps.map((s, i) => (
+                                            <li key={i} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                <span className="w-4 h-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[9px] text-white/60 shrink-0">
+                                                    {i + 1}
+                                                </span>
+                                                {s}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            </motion.div>
         </motion.div>
     );
 }

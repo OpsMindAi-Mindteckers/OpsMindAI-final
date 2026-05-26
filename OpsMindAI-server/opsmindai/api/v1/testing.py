@@ -49,6 +49,7 @@ class GenerateRequest(BaseModel):
     framework:          str   = Field("pytest", description="Test framework: 'pytest' or 'jest'")
     coverage_threshold: float = Field(0.80, ge=0.0, le=1.0, description="Minimum coverage gate (0.0–1.0)")
     pr_number:          Optional[int] = Field(None, description="GitHub PR number — triggers PR comment on gate failure")
+    model:              Optional[str] = Field(None, description="OpenRouter model ID (e.g. deepseek/deepseek-v4-flash:free). Falls back to TESTING_MODEL env var.")
 
 
 class SuiteRequest(BaseModel):
@@ -179,8 +180,7 @@ async def generate_tests(
     await _init_job(redis, job_id, "generation", {"repo_url": body.repo_url, "user_id": str(current_user.id)})
 
     try:
-         # /home/nabakumr/Music/6thMAy/backend/opsmindai/api/v1/testing_tasks.py
-        from opsmindai.api.v1.testing_tasks import task_run_generation
+        from opsmindai.tasks.testing_tasks import task_run_generation
         task_run_generation.apply_async(args=[job_id, payload], task_id=job_id)
     except Exception as exc:
         logger.warning("Celery unavailable — running generation inline: %s", exc)
@@ -235,7 +235,7 @@ async def run_suite(
     await _init_job(redis, job_id, "suite_execution", {"user_id": str(current_user.id)})
 
     try:
-        from opsmindai.api.v1.testing_tasks import task_run_suite
+        from opsmindai.tasks.testing_tasks import task_run_suite
         task_run_suite.apply_async(args=[job_id, payload], task_id=job_id)
     except Exception as exc:
         logger.warning("Celery unavailable — running suite inline: %s", exc)
@@ -281,7 +281,7 @@ async def run_regression(
     await _init_job(redis, job_id, "regression", {"repo_url": body.repo_url, "user_id": str(current_user.id)})
 
     try:
-        from opsmindai.api.v1.testing_tasks import task_run_regression
+        from opsmindai.tasks.testing_tasks import task_run_regression
         task_run_regression.apply_async(args=[job_id, payload], task_id=job_id)
     except Exception as exc:
         logger.warning("Celery unavailable — running regression inline: %s", exc)
