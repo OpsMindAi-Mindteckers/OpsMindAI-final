@@ -42,11 +42,110 @@ class RegressionSuite:
     warnings: list[str] = field(default_factory=list)
 
 
-# ── Lazy imports ──────────────────────────────────────────────────────────────
+# ── LLM router ───────────────────────────────────────────────────────────────
 
-def _get_hybrid_router():
-    from opsmindai.inference.hybrid_router import HybridRouter
-    return HybridRouter()
+def _get_hybrid_router(model: Optional[str] = None):
+    """Return an _OpenRouterCaller instance (mirrors test_generator pattern)."""
+    return _OpenRouterCaller(model=model)
+
+
+class _OpenRouterCaller:
+    """
+    Thin async wrapper that calls OpenRouter with automatic free-model fallback.
+    Mirrors the implementation in test_generator.py.
+    """
+
+    _FALLBACK_MODELS = [
+        "openai/gpt-oss-20b:free",
+        "qwen/qwen3-coder:free",
+        "deepseek/deepseek-v4-flash:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "google/gemma-4-31b-it:free",
+        "minimax/minimax-m2.5:free",
+        "nousresearch/hermes-3-llama-3.1-405b:free",
+        "arcee-ai/trinity-large-thinking:free",
+    ]
+
+    def __init__(self, model: Optional[str] = None):
+        self._model_override = model
+
+    async def call_llm(
+        self,
+        prompt: str,
+        task_type: str = "regression",
+        system_prompt: Optional[str] = None,
+    ) -> tuple[str, int, str]:
+        """
+        Call OpenRouter with automatic free-model fallback.
+
+        Returns:
+            (response_text, tokens_used, model_id)
+        """
+        import asyncio
+        from openai import AsyncOpenAI
+        from opsmindai.core.config import settings
+
+        if not settings.OPENROUTER_API_KEY:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is not set. Add it to your .env file."
+            )
+
+        primary = self._model_override or getattr(settings, "TESTING_MODEL", None) or self._FALLBACK_MODELS[0]
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for m in [primary] + self._FALLBACK_MODELS:
+            if m not in seen:
+                seen.add(m)
+                candidates.append(m)
+
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            last_exc: Exception = RuntimeError("No models available")
+            for i, candidate in enumerate(candidates):
+                try:
+                    resp = await client.chat.completions.create(
+                        model=candidate,
+                        messages=messages,
+                        max_tokens=2048,
+                    )
+                    text = resp.choices[0].message.content or ""
+                    tokens = resp.usage.total_tokens if resp.usage else 0
+                    if i > 0:
+                        logger.info("regression_suite: succeeded with fallback model %s", candidate)
+                    return text, tokens, candidate
+                except Exception as exc:
+                    status = (
+                        getattr(getattr(exc, "response", None), "status_code", None)
+                        or getattr(exc, "status_code", None)
+                    )
+                    if status in (404, 429, 402, 503) and i < len(candidates) - 1:
+                        logger.warning(
+                            "regression_suite: model %s unavailable (%s), trying %s",
+                            candidate, status, candidates[i + 1],
+                        )
+                        await asyncio.sleep(0.3)
+                        last_exc = exc
+                    else:
+                        raise
+            raise last_exc
+        finally:
+            # Safe cleanup: don't fail if event loop is closed (common in Celery)
+            try:
+                loop = asyncio.get_running_loop()
+                if not loop.is_closed():
+                    await asyncio.wait_for(client.aclose(), timeout=1.0)
+            except (RuntimeError, asyncio.TimeoutError, asyncio.CancelledError):
+                pass  # Event loop closed or unavailable — skip cleanup
 
 
 def _get_rag_pipeline():
@@ -57,7 +156,6 @@ def _get_rag_pipeline():
 # ── System prompts ────────────────────────────────────────────────────────────
 
 _INCIDENT_SYSTEM_PROMPT = textwrap.dedent("""\
-    You are an expert Python QA engineer writing regression tests for production incidents.
 
     Given an incident description, generate a pytest test that:
     1. Reproduces the exact failure condition that caused the incident.

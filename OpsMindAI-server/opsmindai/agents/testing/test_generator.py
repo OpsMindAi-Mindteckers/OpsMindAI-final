@@ -60,9 +60,112 @@ class GeneratedTests:
 
 # ── Lazy imports (avoid circular deps) ───────────────────────────────────────
 
-def _get_hybrid_router():
-    from opsmindai.inference.hybrid_router import HybridRouter
-    return HybridRouter()
+def _get_hybrid_router(model: Optional[str] = None):
+    """Return the module-level call_llm wrapper (not a class instance)."""
+    return _OpenRouterCaller(model=model)
+
+
+class _OpenRouterCaller:
+    """
+    Thin async wrapper that calls OpenRouter directly, matching the
+    (response_text, tokens_used, model_name) 3-tuple that test_generator
+    expects from router.call_llm().
+
+    Uses the same fallback model chain as refactor_engine.py.
+    """
+
+    _FALLBACK_MODELS = [
+        "openrouter/free",
+        "openai/gpt-oss-20b:free",                     # fallback 1
+        "qwen/qwen3-coder:free",                       # fallback 2
+        "deepseek/deepseek-v4-flash:free",             # fallback 3
+        "meta-llama/llama-3.3-70b-instruct:free",      # fallback 4
+        "nvidia/nemotron-3-super-120b-a12b:free",      # fallback 5
+        "google/gemma-4-31b-it:free",                  # fallback 6
+        "minimax/minimax-m2.5:free",                   # fallback 7
+        "nousresearch/hermes-3-llama-3.1-405b:free",   # fallback 8
+        "arcee-ai/trinity-large-thinking:free",        # fallback 9 — last (rate limits often)
+    ]
+
+    def __init__(self, model: Optional[str] = None):
+        """
+        Args:
+            model: Optional OpenRouter model ID override from the user.
+                   If None, falls back to settings.REFACTOR_MODEL.
+        """
+        self._model_override = model
+
+    async def call_llm(
+        self,
+        prompt: str,
+        task_type: str = "test_generation",
+        system_prompt: Optional[str] = None,
+    ) -> tuple[str, int, str]:
+        """
+        Call OpenRouter with automatic free-model fallback.
+
+        Returns:
+            (response_text, tokens_used, model_id)
+        """
+        import asyncio
+        from openai import AsyncOpenAI
+        from opsmindai.core.config import settings
+
+        if not settings.OPENROUTER_API_KEY:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is not set. Add it to your .env file."
+            )
+
+        # Default primary: OpenAI GPT OSS 120B (most reliable free model).
+        # User-selected model takes precedence; settings.REFACTOR_MODEL is last resort.
+        # Use TESTING_MODEL from .env; user-selected model takes precedence
+        primary = self._model_override or settings.TESTING_MODEL
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for m in [primary] + self._FALLBACK_MODELS:
+            key = m if m.endswith(":free") else m
+            if key not in seen:
+                seen.add(key)
+                candidates.append(m)
+
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        last_exc: Exception = RuntimeError("No models available")
+        for i, candidate in enumerate(candidates):
+            try:
+                resp = await client.chat.completions.create(
+                    model=candidate,
+                    messages=messages,
+                    max_tokens=1200,  # faster for demo; raise to 2048 for production
+                )
+                text = resp.choices[0].message.content or ""
+                tokens = resp.usage.total_tokens if resp.usage else 0
+                if i > 0:
+                    logger.info("test_generator: succeeded with fallback model %s", candidate)
+                return text, tokens, candidate
+            except Exception as exc:
+                status = (
+                    getattr(getattr(exc, "response", None), "status_code", None)
+                    or getattr(exc, "status_code", None)
+                )
+                if status in (404, 429, 402, 503) and i < len(candidates) - 1:
+                    logger.warning(
+                        "test_generator: model %s unavailable (%s), trying %s",
+                        candidate, status, candidates[i + 1],
+                    )
+                    await asyncio.sleep(0.3)  # fast fallback
+                    last_exc = exc
+                else:
+                    raise
+        raise last_exc
 
 
 def _get_rag_pipeline():
@@ -267,8 +370,39 @@ _SYSTEM_PROMPT_JEST = textwrap.dedent("""\
     3. Output ONLY a TypeScript code block between ```typescript and ```. No prose.
 """)
 
+_SYSTEM_PROMPT_VITEST = textwrap.dedent("""    You are an expert JavaScript/TypeScript test engineer generating Vitest test suites.
 
-def _build_prompt(sig: FunctionSignature, framework: str, rag_snippets: list[str]) -> str:
+    STRICT RULES — violations break the test runner:
+    1. ALWAYS use the EXACT import path provided in the prompt (IMPORT PATH section).
+    2. NEVER use `#` comments. ONLY use `//` comments.
+    3. NEVER use `await` outside an async function.
+    4. NEVER use dynamic import() — use static imports at the top.
+    5. For REACT HOOKS (functions starting with `use`):
+       - Import `renderHook` and `act` from '@testing-library/react'
+       - ALWAYS wrap hook calls in renderHook:
+         const { result } = renderHook(() => useMyHook(args));
+       - Access hook state via result.current
+       - Wrap state-changing calls in act(() => { ... })
+       - Example:
+         import { renderHook, act } from '@testing-library/react';
+         import { useMyHook } from '../../src/hooks/useMyHook';
+         it('should handle happy path', () => {
+           const { result } = renderHook(() => useMyHook());
+           expect(result.current).toBeDefined();
+         });
+    6. For REGULAR FUNCTIONS: import and call them directly.
+    7. For REACT COMPONENTS: import and use render() from '@testing-library/react'.
+    8. Each function MUST have exactly 3 tests:
+       - it('should handle happy path...')  — valid inputs, assert correct output
+       - it('should handle edge case...')   — boundary or unusual but valid input
+       - it('should handle null/empty...')  — null, undefined, empty string, or 0
+    9. Use vi.mock() for dependencies (NOT jest.mock). Use vi.fn() (NOT jest.fn).
+    10. Output ONLY a TypeScript code block between ```typescript and ```. No prose.
+""")
+
+
+def _build_prompt(sig: FunctionSignature, framework: str, rag_snippets: list[str],
+                   source_file: str = "") -> str:
     """
     Build the per-function LLM prompt combining signature, body, and RAG context.
 
@@ -276,6 +410,7 @@ def _build_prompt(sig: FunctionSignature, framework: str, rag_snippets: list[str
         sig: Extracted function signature metadata.
         framework: 'pytest' or 'jest'.
         rag_snippets: Relevant past test results from RAG KB.
+        source_file: Relative path to the source file being tested.
 
     Returns:
         Formatted prompt string.
@@ -290,9 +425,19 @@ def _build_prompt(sig: FunctionSignature, framework: str, rag_snippets: list[str
         joined = "\n---\n".join(rag_snippets[:3])
         context_block = f"\n\nRELEVANT PAST TEST PATTERNS:\n{joined}\n"
 
+    # Compute the correct import path for JS/TS tests placed in tests/unit/
+    import_hint = ""
+    if framework in ("jest", "vitest") and source_file:
+        _no_ext = str(Path(source_file).with_suffix(""))
+        _rel = f"../../{_no_ext}"
+        import_hint = f"""
+IMPORT PATH: The test file will be in tests/unit/. Import the module like this:
+  import {{ {sig.name} }} from '{_rel}';
+"""
+
     return textwrap.dedent(f"""\
         Generate {framework} tests for the following function.
-
+        {import_hint}
         FUNCTION SIGNATURE:
         {"async " if sig.is_async else ""}def {full_name}({args_str}){ret_str}
 
@@ -400,21 +545,78 @@ def _build_jest_header(source_file: str) -> str:
     """)
 
 
+def _build_vitest_header(source_file: str) -> str:
+    # Compute correct relative path from tests/unit/ to the source file
+    # e.g. src/hooks/useNoteEditor.js -> ../../src/hooks/useNoteEditor
+    _stem = Path(source_file).stem
+    _no_ext = str(Path(source_file).with_suffix(""))
+    _rel = f"../../{_no_ext}" if not source_file.startswith("..") else f"../{_no_ext}"
+    return textwrap.dedent(f"""\
+        /**
+         * Auto-generated tests for {source_file}
+         * Generated by OpsMind AI Testing Agent
+         */
+        import {{ describe, it, expect, vi, beforeEach, afterEach }} from 'vitest';
+        // Import the module under test — path is relative to tests/unit/
+        // import {{ {_stem} }} from '{_rel}';
+
+    """)
+
+
+def _detect_js_framework(repo_root: str) -> str:
+    """
+    Detect whether the repo uses Vitest or Jest by inspecting package.json.
+
+    Returns 'vitest' if vitest is found in dependencies/devDependencies/scripts,
+    otherwise returns 'jest'.
+    """
+    pkg_path = os.path.join(repo_root, "package.json")
+    if not os.path.exists(pkg_path):
+        return "jest"
+    try:
+        import json as _json
+        with open(pkg_path, encoding="utf-8") as f:
+            pkg = _json.load(f)
+        # Check deps and scripts for vitest
+        all_deps = {
+            **pkg.get("dependencies", {}),
+            **pkg.get("devDependencies", {}),
+        }
+        if "vitest" in all_deps:
+            return "vitest"
+        scripts = pkg.get("scripts", {})
+        if any("vitest" in str(v) for v in scripts.values()):
+            return "vitest"
+    except Exception:
+        pass
+    return "jest"
+
+
 # ── Output path resolution ────────────────────────────────────────────────────
 
-def _output_path(source_file: str, framework: str, repo_root: str = ".") -> str:
+def _output_path(source_file: str, framework: str, repo_root: str = ".", persistent_dir: Optional[str] = None) -> str:
     """
     Compute test output path following pytest/Jest conventions.
 
+    If persistent_dir is provided, writes there instead of inside repo_root.
+    This ensures test files survive after the temp clone is deleted.
+
     Args:
-        source_file: Relative path to source file (e.g. 'src/utils.py').
-        framework: 'pytest' or 'jest'.
-        repo_root: Root of the repository on disk.
+        source_file:     Relative path to source file (e.g. 'src/utils.py').
+        framework:       'pytest', 'vitest', or 'jest'.
+        repo_root:       Root of the repository on disk.
+        persistent_dir:  If set, write here instead of repo_root/tests/unit/.
 
     Returns:
         Absolute path for the generated test file.
     """
     stem = Path(source_file).stem
+    if persistent_dir:
+        os.makedirs(persistent_dir, exist_ok=True)
+        if framework == "pytest":
+            return os.path.join(persistent_dir, f"test_{stem}.py")
+        else:
+            return os.path.join(persistent_dir, f"{stem}.test.ts")
     if framework == "pytest":
         out = os.path.join(repo_root, "tests", "unit", f"test_{stem}.py")
     else:
@@ -443,6 +645,8 @@ def _get_test_generation_config(framework: str) -> tuple[str, str, str]:
     """Get system prompt, code language, and header for test framework."""
     if framework == "pytest":
         return _SYSTEM_PROMPT_PYTEST, "python", _build_pytest_header
+    elif framework == "vitest":
+        return _SYSTEM_PROMPT_VITEST, "typescript", _build_vitest_header
     else:
         return _SYSTEM_PROMPT_JEST, "typescript", _build_jest_header
 
@@ -531,7 +735,7 @@ async def _generate_tests_for_functions(
             filter_type="test_result",
         )
         rag_snippets = [r.content for r in rag_results]
-        prompt = _build_prompt(sig, framework, rag_snippets)
+        prompt = _build_prompt(sig, framework, rag_snippets, source_file=file_path)
 
         # Generate tests
         response, tokens, model = await router.call_llm(
@@ -553,9 +757,12 @@ async def _generate_tests_for_functions(
         if code is None:
             continue
 
-        test_blocks.append(
-            f"\n# ── Tests for {sig.name} {'(async)' if sig.is_async else ''} ──\n"
-        )
+        # Use language-appropriate comment syntax for the section header
+        if framework in ("jest", "vitest"):
+            separator = f"\n// ── Tests for {sig.name} {'(async)' if sig.is_async else ''} ──\n"
+        else:
+            separator = f"\n# ── Tests for {sig.name} {'(async)' if sig.is_async else ''} ──\n"
+        test_blocks.append(separator)
         test_blocks.append(code)
 
     return test_blocks, total_tokens, model_used, warnings
@@ -568,6 +775,8 @@ async def generate_tests(
     framework: str = "pytest",
     threshold: float = 0.80,
     repo_root: str = ".",
+    model: Optional[str] = None,
+    persistent_dir: Optional[str] = None,
 ) -> GeneratedTests:
     """
     Generate LLM-based test stubs for all public functions in a source file.
@@ -594,8 +803,24 @@ async def generate_tests(
     """
     # Extract signatures
     sigs = _extract_signatures_from_source(file_path, source_code)
+
+    # Auto-detect Vitest vs Jest for JS/TS files when caller passed 'jest'
+    ext = Path(file_path).suffix.lower()
+    if framework == "jest" and ext in (".js", ".ts", ".jsx", ".tsx"):
+        detected = _detect_js_framework(repo_root)
+        if detected == "vitest":
+            logger.info("Detected Vitest in repo — switching framework from 'jest' to 'vitest'")
+            framework = "vitest"
     if not sigs:
-        raise ValueError(f"No public functions found in {file_path}")
+        logger.info("No public functions found in %s — skipping", file_path)
+        return GeneratedTests(
+            source_file=file_path,
+            output_file="",
+            framework=framework,
+            functions_processed=0,
+            test_source="",
+            warnings=[f"No public functions found in {file_path}"],
+        )
 
     logger.info("Extracted %d function(s) from %s", len(sigs), file_path)
 
@@ -604,7 +829,7 @@ async def generate_tests(
     header = header_builder(file_path)
 
     # Initialize LLM and RAG
-    router = _get_hybrid_router()
+    router = _get_hybrid_router(model=model)
     rag = _get_rag_pipeline()
 
     # Setup temp directory and test blocks
@@ -617,16 +842,27 @@ async def generate_tests(
     )
 
     if not func_blocks:
-        raise RuntimeError(
-            f"All test generation attempts failed for {file_path}. "
-            "Check LLM availability and source file syntax."
+        logger.warning(
+            "All test generation attempts failed for %s — check LLM availability",
+            file_path,
+        )
+        return GeneratedTests(
+            source_file=file_path,
+            output_file="",
+            framework=framework,
+            functions_processed=len(sigs),
+            test_source="",
+            warnings=[
+                f"All test generation attempts failed for {file_path}. "
+                "Check LLM availability and source file syntax."
+            ],
         )
 
     test_blocks.extend(func_blocks)
 
     # Write output file
     final_source = "\n".join(test_blocks)
-    out_path = _output_path(file_path, framework, repo_root)
+    out_path = _output_path(file_path, framework, repo_root, persistent_dir=persistent_dir)
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(final_source)
