@@ -30,7 +30,7 @@ def create_redis_pool() -> aioredis.ConnectionPool:
     """Create the module-level connection pool.  Called once from lifespan."""
     global _pool
     _pool = aioredis.ConnectionPool.from_url(
-        settings.REDIS_URL,          # e.g. redis://localhost:6379/0
+        settings.REDIS_URL,          # e.g. redis://default:UlZV4uuiRwNdx3uEAJJBTVqJN3e3CG8j@redis-17963.c261.us-east-1-4.ec2.cloud.redislabs.com:17963/0
         max_connections=20,
         decode_responses=True,
         socket_connect_timeout=5,

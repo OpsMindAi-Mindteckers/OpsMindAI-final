@@ -1,0 +1,128 @@
+groups:
+
+  - name: opsmindai.sre
+    rules:
+
+      # ── High error rate on any tracked service ─────────────────────────────
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{status=~"5.."}[5m])
+          / rate(http_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP 5xx error rate on {{ $labels.job }}"
+          description: >
+            Service {{ $labels.job }} error rate is {{ $value | humanizePercentage }}
+            over the last 5 minutes — threshold 5 %.
+
+      # ── P99 latency breach ─────────────────────────────────────────────────
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            rate(http_request_duration_seconds_bucket[5m])
+          ) * 1000 > 1000
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "P99 latency > 1 s on {{ $labels.job }}"
+          description: >
+            P99 latency for {{ $labels.job }} is {{ $value | humanize }} ms.
+
+      # ── Agent failure rate ─────────────────────────────────────────────────
+      - alert: AgentHighFailureRate
+        expr: |
+          rate(opsmind_agent_runs_total{status="failed"}[10m])
+          / rate(opsmind_agent_runs_total[10m]) > 0.10
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Agent {{ $labels.agent_name }} failure rate > 10 %"
+          description: >
+            {{ $labels.agent_name }} is failing at {{ $value | humanizePercentage }}
+            over the last 10 minutes.
+
+      # ── Abnormally slow agent runs ─────────────────────────────────────────
+      - alert: AgentSlowExecution
+        expr: |
+          histogram_quantile(0.95,
+            rate(opsmind_agent_duration_seconds_bucket[10m])
+          ) > 300
+        for: 5m
+        labels:
+          severity: medium
+        annotations:
+          summary: "Agent {{ $labels.agent_name }} P95 duration > 5 min"
+          description: >
+            {{ $labels.agent_name }} P95 execution time is {{ $value | humanize }} s.
+
+      # ── Cloud LLM routing spike (cost guard) ──────────────────────────────
+      - alert: CloudLLMRoutingSpike
+        expr: |
+          rate(opsmind_llm_requests_total{routed_to="cloud"}[10m])
+          / rate(opsmind_llm_requests_total[10m]) > 0.40
+        for: 5m
+        labels:
+          severity: medium
+        annotations:
+          summary: "Cloud LLM routing > 40 % (cost alert)"
+          description: >
+            {{ $value | humanizePercentage }} of LLM requests are being routed to
+            the cloud provider — check Ollama availability.
+
+      # ── Remediation failure ────────────────────────────────────────────────
+      - alert: RemediationFailed
+        expr: |
+          rate(opsmind_remediation_success_total{status="failed"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Remediation playbook {{ $labels.playbook }} failed"
+          description: >
+            Playbook {{ $labels.playbook }} reported a failed execution in the last
+            15 minutes — manual intervention may be required.
+
+      # ── Coverage regression ────────────────────────────────────────────────
+      - alert: CoverageRegression
+        expr: opsmind_coverage_delta_pct < -2
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: "Coverage dropped by {{ $value | humanize }} % on {{ $labels.repo }}/{{ $labels.branch }}"
+          description: >
+            Test coverage on {{ $labels.repo }} ({{ $labels.branch }}) fell by
+            {{ $value | humanize }} percentage points vs the previous run.
+
+      # ── RAG cache completely cold ──────────────────────────────────────────
+      - alert: RAGCacheColdStreak
+        expr: |
+          rate(opsmind_rag_hits_total{cache_hit="true"}[30m])
+          / rate(opsmind_rag_hits_total[30m]) < 0.05
+        for: 15m
+        labels:
+          severity: low
+        annotations:
+          summary: "RAG cache hit rate near zero"
+          description: >
+            RAG cache hit rate is {{ $value | humanizePercentage }} over the last
+            30 minutes — vector store may be empty or query patterns have shifted.
+
+      # ── MTTR SLO breach ───────────────────────────────────────────────────
+      - alert: HighMTTR
+        expr: |
+          histogram_quantile(0.90,
+            rate(opsmind_incident_mttr_seconds_bucket[1h])
+          ) > 1800
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "P90 MTTR > 30 min on {{ $labels.service }}"
+          description: >
+            Incidents on {{ $labels.service }} ({{ $labels.severity }}) are taking
+            {{ $value | humanize }} s to resolve at P90.

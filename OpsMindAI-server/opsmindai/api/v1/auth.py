@@ -316,7 +316,8 @@ async def get_current_user(
             cu = r.json()
             emails = cu.get("email_addresses") or []
             email = emails[0].get("email_address", "") if emails else ""
-            full_name = cu.get("first_name", "") + " " + cu.get("last_name", "")
+            # full_name = cu.get("first_name", "") + " " + cu.get("last_name", "")
+            full_name = f"{cu.get('first_name') or ''} {cu.get('last_name') or ''}".strip()
         
         user = User(id=user_id, email=email, full_name=full_name.strip() or None)
         db.add(user)

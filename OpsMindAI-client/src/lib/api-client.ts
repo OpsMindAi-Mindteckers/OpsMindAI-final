@@ -40,6 +40,7 @@ class ApiClient {
   ): Promise<ApiResponse<T>> {
     const url = `${this.baseUrl}${endpoint}`;
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    // const token = typeof window !== 'undefined' ? localStorage.getItem('opsmindai_token') : null;
 
     const headers: HeadersInit = {
       ...this.defaultHeaders,

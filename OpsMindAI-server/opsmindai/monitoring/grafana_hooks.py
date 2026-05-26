@@ -69,10 +69,10 @@ async def post_annotation(
     if dashboard_id is not None:
         payload["dashboardId"] = dashboard_id
 
-    auth = _get_auth()
+    headers = _get_auth_headers()
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, auth=auth) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
             annotation_id = resp.json().get("id")
@@ -157,12 +157,20 @@ def _fmt_duration(seconds: float) -> str:
     return f"{seconds / 3600:.1f}h"
 
 
-def _get_auth() -> Optional[httpx.BasicAuth]:
+def _get_auth_headers() -> dict[str, str]:
     """
-    Return Grafana basic auth credentials if API key or user/pass is configured.
+    Return HTTP headers for Grafana instance API (/api/annotations).
 
-    Grafana API token should be set as: GRAFANA_URL = http://admin:password@localhost:3000
-    or inline in the URL. Returns None (no auth) otherwise.
+    Priority:
+      1. GRAFANA_SERVICE_TOKEN → Bearer (Grafana Service Account token, created inside the instance)
+      2. GRAFANA_API_KEY fallback → Bearer (works only if the key has grafana:write scope)
+      3. Neither → empty (unauthenticated, only works for open Grafana installs)
+
+    Note: Grafana Cloud Access Policy tokens (glc_...) do NOT authenticate against
+    the Grafana instance API. Use a Service Account token from:
+    Grafana → Administration → Service Accounts → Add service account → Add token
     """
-    # If credentials are embedded in the URL, httpx handles them automatically
-    return None
+    token = settings.GRAFANA_SERVICE_TOKEN or settings.GRAFANA_API_KEY
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}

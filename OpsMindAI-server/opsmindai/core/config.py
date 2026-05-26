@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
     OPENROUTER_API_KEY: str = ""  # Set via .env
-    REFACTOR_MODEL:     str = "meta-llama/llama-3.3-70b-instruct:free"
+    REFACTOR_MODEL:     str = "qwen/qwen3-coder:free"
 
     # ── Vector store ──────────────────────────────────────────────────────────
     VECTOR_STORE:   str = "chromadb"              # chromadb | qdrant
@@ -66,9 +66,13 @@ class Settings(BaseSettings):
     QDRANT_URL:     str = "http://localhost:6333"
 
     # ── Monitoring ────────────────────────────────────────────────────────────
-    PROMETHEUS_URL: str = "http://localhost:9090"
-    LOKI_URL:       str = "http://localhost:3100"
-    GRAFANA_URL:    str = "http://localhost:3000"
+    PROMETHEUS_URL:     str = "http://localhost:9090"
+    LOKI_URL:           str = "http://localhost:3100"
+    GRAFANA_URL:        str = "http://localhost:3000"
+    GRAFANA_API_KEY:      str = ""  # Grafana Cloud Access Policy token — used for Prometheus & Loki auth
+    GRAFANA_SERVICE_TOKEN: str = "" # Grafana instance Service Account token — used for /api/annotations
+    LOKI_USER_ID:         str = ""  # Grafana Cloud → Stack Details → Loki → User (numeric)
+    PROMETHEUS_USER_ID:   str = ""  # Grafana Cloud → Stack Details → Prometheus → User (numeric)
 
     # ── Alerting / notifications ──────────────────────────────────────────────
     SLACK_WEBHOOK_URL:        str = ""

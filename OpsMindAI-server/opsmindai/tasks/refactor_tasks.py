@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _sync_redis():
     """Return a synchronous Redis client for use inside Celery tasks."""
     return sync_redis.Redis.from_url(
-        os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+        os.environ.get("REDIS_URL", "redis://default:UlZV4uuiRwNdx3uEAJJBTVqJN3e3CG8j@redis-17963.c261.us-east-1-4.ec2.cloud.redislabs.com:17963/0"),
         decode_responses=True,
     )
 
