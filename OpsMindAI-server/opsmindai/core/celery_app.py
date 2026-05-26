@@ -20,13 +20,17 @@ import os
 
 
 from celery import Celery
+from dotenv import load_dotenv
 
-REDIS_URL  = os.environ.get("REDIS_URL", "redis://default:UlZV4uuiRwNdx3uEAJJBTVqJN3e3CG8j@redis-17963.c261.us-east-1-4.ec2.cloud.redislabs.com:17963/0")
-RESULT_URL = os.environ.get("CELERY_RESULT_BACKEND", REDIS_URL)
+load_dotenv()
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+BROKER_URL = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
+RESULT_URL = os.environ.get("CELERY_RESULT_BACKEND") or REDIS_URL
 
 celery_app = Celery(
     "opsmindai",
-    broker=REDIS_URL,
+    broker=BROKER_URL,
     backend=RESULT_URL,
     include=[
         "opsmindai.tasks.refactor_tasks",

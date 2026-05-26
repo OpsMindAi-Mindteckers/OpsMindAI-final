@@ -55,8 +55,20 @@ def _rca_key(incident_id: str) -> str:
 # ── Lazy imports (avoid circulars) ────────────────────────────────────────────
 
 def _get_hybrid_router():
-    from opsmindai.inference.hybrid_router import HybridRouter
-    return HybridRouter()
+    # hybrid_router exposes call_llm() directly, not a HybridRouter class
+    # Return a thin wrapper that matches the router.infer() interface
+    class _RouterShim:
+        async def infer(self, system_prompt, user_prompt, task_type="rca",
+                        estimated_tokens=1000, **kwargs):
+            from opsmindai.inference.hybrid_router import call_llm
+            # call_llm takes: prompt, task_type, system_prompt
+            text = await call_llm(
+                prompt=user_prompt,
+                task_type=task_type,
+                system_prompt=system_prompt,
+            )
+            return {"text": text}
+    return _RouterShim()
 
 
 def _get_rag_pipeline():
@@ -96,8 +108,13 @@ async def _fetch_prometheus_metrics(service: str) -> dict[str, Any]:
     results: dict[str, Any] = {"ok": True, "queried_at":
                                datetime.now(timezone.utc).isoformat()}
 
+    # Grafana Cloud Prometheus requires Basic Auth: user_id:api_key
+    _prom_user = os.environ.get("PROMETHEUS_USER_ID", "")
+    _prom_key  = os.environ.get("GRAFANA_API_KEY", "")
+    _prom_auth = (_prom_user, _prom_key) if _prom_user and _prom_key else None
+
     try:
-        async with httpx.AsyncClient(timeout=_PROM_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=_PROM_TIMEOUT_S, auth=_prom_auth) as client:
             for name, query in queries.items():
                 try:
                     resp = await client.get(
@@ -373,7 +390,7 @@ async def _safe_rag_lookup(alert: NormalisedAlert) -> list[dict[str, Any]]:
         query = f"{alert.alert_name} {alert.service} {alert.severity.value}"
         results = await rag.retrieve(
             query=query,
-            doc_type="incident",
+            filter_type="incident",
             top_k=_RAG_TOP_K,
         )
         if isinstance(results, list):

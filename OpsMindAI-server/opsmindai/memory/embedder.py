@@ -23,14 +23,30 @@ def load_model() -> object:
     """
     Load all-MiniLM-L6-v2 once at startup and cache it.
 
+    Uses offline mode first if model is already cached locally —
+    avoids 2-minute HuggingFace timeout when network is slow/blocked.
+
     Returns:
         SentenceTransformer model instance.
     """
     global _model
     if _model is None:
+        import os
         from sentence_transformers import SentenceTransformer  # type: ignore
+
         logger.info("embedder: loading model %s …", _MODEL_NAME)
-        _model = SentenceTransformer(_MODEL_NAME)
+
+        # Try offline first (model already cached) — avoids HuggingFace timeout
+        try:
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            _model = SentenceTransformer(_MODEL_NAME)
+        except Exception:
+            # Not cached yet — fetch from HuggingFace
+            os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            os.environ.pop("HF_DATASETS_OFFLINE", None)
+            _model = SentenceTransformer(_MODEL_NAME)
+
         logger.info("embedder: model loaded, dims=384")
     return _model
 

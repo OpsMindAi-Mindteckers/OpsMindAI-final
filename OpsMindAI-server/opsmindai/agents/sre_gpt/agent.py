@@ -149,23 +149,26 @@ async def run_ingest(job_id: str, payload: dict, redis) -> None:
             return
 
         # Auto-dispatch RCA task for new incidents
-        try:
-            from opsmindai.tasks.sre_tasks import task_run_rca
-            rca_job_id = f"rca_{normalised.incident_id}"
-            task_run_rca.apply_async(
-                args=[rca_job_id, {
-                    "incident_id": normalised.incident_id,
-                    "user_id":     user_id,
-                }],
-                task_id=rca_job_id,
-                priority=9,           # SRS §10.1 — alert priority
-            )
-            logger.info(
-                "Auto-dispatched RCA: job=%s incident=%s",
-                rca_job_id, normalised.incident_id,
-            )
-        except Exception as exc:
-            logger.warning("Could not auto-dispatch RCA task: %s", exc)
+        # Skip if called from pipeline (pipeline handles RCA itself inline)
+        _skip_dispatch = payload.get("_pipeline_mode", False)
+        if not _skip_dispatch:
+            try:
+                from opsmindai.tasks.sre_tasks import task_run_rca
+                rca_job_id = f"rca_{normalised.incident_id}"
+                task_run_rca.apply_async(
+                    args=[rca_job_id, {
+                        "incident_id": normalised.incident_id,
+                        "user_id":     user_id,
+                    }],
+                    task_id=rca_job_id,
+                    priority=9,
+                )
+                logger.info(
+                    "Auto-dispatched RCA: job=%s incident=%s",
+                    rca_job_id, normalised.incident_id,
+                )
+            except Exception as exc:
+                logger.warning("Could not auto-dispatch RCA task: %s", exc)
 
     except Exception as exc:
         logger.exception("Ingest failed for job %s", job_id)

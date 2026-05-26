@@ -1,27 +1,32 @@
 """
-opsmindai/core/celery_app.py
+opsmindai/tasks/celery_app.py
 
 Celery application factory for OpsMindAI agents.
 
-Workers (one per agent queue, scaled independently):
-    celery -A opsmindai.core.celery_app worker --loglevel=info -Q refactor -n refactor@%h
-    celery -A opsmindai.core.celery_app worker --loglevel=info -Q sre      -n sre@%h
-    celery -A opsmindai.core.celery_app worker --loglevel=info -Q testing  -n test@%h
+Start all queues with one worker (recommended):
+    celery -A opsmindai.tasks.celery_app worker --loglevel=info --concurrency=8 -n main@%h
 
-Beat (periodic cleanup tasks):
-    celery -A opsmindai.core.celery_app beat --loglevel=info
+Or per-queue workers:
+    celery -A opsmindai.tasks.celery_app worker --loglevel=info -Q testing  -n test@%h
+    celery -A opsmindai.tasks.celery_app worker --loglevel=info -Q pipeline -n pipeline@%h
+    celery -A opsmindai.tasks.celery_app worker --loglevel=info -Q sre      -n sre@%h
+    celery -A opsmindai.tasks.celery_app worker --loglevel=info -Q refactor -n refactor@%h
 """
 
 import os
 
 from celery import Celery
+from dotenv import load_dotenv
 
-REDIS_URL  = os.environ.get("REDIS_URL", "redis://default:UlZV4uuiRwNdx3uEAJJBTVqJN3e3CG8j@redis-17963.c261.us-east-1-4.ec2.cloud.redislabs.com:17963/0")
-RESULT_URL = os.environ.get("CELERY_RESULT_BACKEND", REDIS_URL)
+load_dotenv()
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://default:UlZV4uuiRwNdx3uEAJJBTVqJN3e3CG8j@redis-17963.c261.us-east-1-4.ec2.cloud.redislabs.com:17963/0")
+BROKER_URL = os.environ.get("CELERY_BROKER_URL") or REDIS_URL
+RESULT_URL = os.environ.get("CELERY_RESULT_BACKEND") or REDIS_URL
 
 celery_app = Celery(
     "opsmindai",
-    broker=REDIS_URL,
+    broker=BROKER_URL,
     backend=RESULT_URL,
     include=[
         "opsmindai.tasks.refactor_tasks",
@@ -45,7 +50,7 @@ celery_app.conf.update(
     result_expires=86_400,
 
     # Worker behaviour
-    worker_prefetch_multiplier=1,        # one task at a time per worker process
+    worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
 
@@ -61,11 +66,19 @@ celery_app.conf.update(
         "default":  {"exchange": "default",  "routing_key": "default"},
     },
 
-    # Priority support (Redis broker supports this natively)
+    # Auto-route tasks to correct queues
+    task_routes={
+        "refactor.*":  {"queue": "refactor"},
+        "sre.*":       {"queue": "sre"},
+        "testing.*":   {"queue": "testing"},
+        "pipeline.*":  {"queue": "pipeline"},
+    },
+
+    # Priority
     task_queue_max_priority=10,
     task_default_priority=5,
 
-    # Time limits (seconds) — soft triggers SoftTimeLimitExceeded, hard = SIGKILL
-    task_soft_time_limit=240,            # 10 min
-    task_time_limit=240,                 # 11 min
+    # Time limits
+    task_soft_time_limit=240,
+    task_time_limit=260,
 )

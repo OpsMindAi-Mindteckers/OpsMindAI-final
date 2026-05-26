@@ -13,10 +13,19 @@ import {
     ChevronRight,
     RotateCw,
     RefreshCw,
+    Activity,
     GitBranch,
+    Shield,
     Zap,
     AlertTriangle,
+    ArrowRight,
+    Terminal,
+    Cpu,
+    FileText,
     FlaskConical,
+    Bug,
+    TrendingUp,
+    Info,
     History,
     FileCode2,
     Database,
@@ -321,7 +330,6 @@ export default function TestingAgentPage() {
 
     return (
         <motion.div variants={container} initial="hidden" animate="visible" className="space-y-6">
-
             {/* Header */}
             <motion.div variants={item} className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
@@ -333,22 +341,7 @@ export default function TestingAgentPage() {
                 </div>
             </motion.div>
 
-            {/* Top tabs */}
-            <motion.div variants={item} className="flex gap-1 bg-white/5 border border-white/8 rounded-xl p-1 w-fit">
-                {([
-                    { key: "standalone", label: "Standalone Test", icon: FlaskConical },
-                    { key: "history",    label: "Job History",     icon: History },
-                ] as { key: Tab; label: string; icon: React.ElementType }[]).map(t => (
-                    <button
-                        key={t.key}
-                        onClick={() => setTab(t.key)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === t.key ? "bg-white/10 text-white shadow" : "text-muted-foreground hover:text-white"}`}
-                    >
-                        <t.icon className="w-4 h-4" />
-                        {t.label}
-                    </button>
-                ))}
-            </motion.div>
+            {/* ── STANDALONE TAB ─────────────────────────────────────────────── */}
 
             {/* ── STANDALONE TAB ─────────────────────────────────────────────── */}
             {tab === "standalone" && (
@@ -465,7 +458,7 @@ export default function TestingAgentPage() {
                                                         <span className="text-sm text-white font-mono">{genJob.job_id}</span>
                                                         <StatusBadge status={genJob.status} />
                                                     </div>
-                                                    {genJob.duration_s !== undefined && (
+                                                    {genJob.duration_s != null && (
                                                         <span className="text-xs text-muted-foreground flex items-center gap-1">
                                                             <Clock className="w-3 h-3" /> {genJob.duration_s.toFixed(1)}s
                                                         </span>
@@ -580,7 +573,7 @@ export default function TestingAgentPage() {
                                                             : <XCircle className="w-4 h-4 text-rose-400" />}
                                                     <span className="text-sm text-white font-mono">{suiteJob.job_id}</span>
                                                     <StatusBadge status={suiteJob.status} />
-                                                    {suiteJob.duration_s !== undefined && (
+                                                    {suiteJob.duration_s != null && (
                                                         <span className="text-xs text-muted-foreground flex items-center gap-1 ml-auto">
                                                             <Clock className="w-3 h-3" /> {suiteJob.duration_s.toFixed(1)}s
                                                         </span>

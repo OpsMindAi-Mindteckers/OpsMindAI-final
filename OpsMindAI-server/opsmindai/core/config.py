@@ -54,10 +54,12 @@ class Settings(BaseSettings):
     CONFIDENCE_THRESHOLD: float = 0.80   # route to cloud below this
 
     # ── LLM — cloud ───────────────────────────────────────────────────────────
-    CLOUD_LLM_PROVIDER: str = "anthropic"   # anthropic | openai | mistral
+    CLOUD_LLM_PROVIDER: str = "openrouter"   # anthropic | openai | mistral
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
     OPENROUTER_API_KEY: str = ""  # Set via .env
+    REFACTOR_MODEL:     str = "qwen/qwen3-coder"
+    TESTING_MODEL:      str = "openai/gpt-oss-120b"
     REFACTOR_MODEL:     str = "qwen/qwen3-coder:free"
 
     # ── Vector store ──────────────────────────────────────────────────────────

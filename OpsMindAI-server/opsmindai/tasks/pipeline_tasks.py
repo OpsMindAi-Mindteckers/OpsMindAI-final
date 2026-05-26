@@ -253,7 +253,6 @@ def task_run_pipeline(self, pipeline_id: str, payload: dict) -> None:
     logger.info("[pipeline] %s starting  service=%s", pipeline_id, service)
 
     _update_pipeline(r, pipeline_id,
-                     pipeline_id=pipeline_id,
                      status="running",
                      current_stage="sre_monitor",
                      stages={s: "pending" for s in _STAGES},
@@ -281,8 +280,22 @@ def task_run_pipeline(self, pipeline_id: str, payload: dict) -> None:
 
         # Phase 1: ingest
         ingest_result = _run_sre_ingest(redis_adapter, sre_job_id,
-                                        {"alert_payload": alert_payload, "user_id": user_id})
-        incident_id = ingest_result.get("incident_id", f"inc_{uuid.uuid4().hex[:8]}")
+                                {"alert_payload": alert_payload, "user_id": user_id,
+                                 "_pipeline_mode": True})
+        incident_id = ingest_result.get("incident_id") or f"inc_{uuid.uuid4().hex[:8]}"
+        if ingest_result.get("status") == "failed" or not ingest_result.get("incident_id"):
+            fallback = {
+                "incident_id": incident_id,
+                "fingerprint": uuid.uuid4().hex,
+                "source": "prometheus",
+                "service": service,
+                "severity": "high",
+                "alert_name": "PipelineAlert",
+                "labels": {}, "annotations": {},
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+                "namespace": None, "raw_payload": {},
+        }
+            redis_adapter._r.setex(f"incident:{incident_id}", 86400, json.dumps(fallback))
 
         # Phase 2: RCA
         rca_job_id = f"rca_{uuid.uuid4().hex[:12]}"
@@ -534,7 +547,7 @@ def _build_alert_payload(input_type: str, server_url: str, raw_log: str,
                          service: str) -> dict:
     if input_type == "url":
         return {
-            "source":      "external_url",
+            "source":      "prometheus",
             "service":     service,
             "severity":    "high",
             "alert_name":  "ExternalServiceAlert",
@@ -543,7 +556,7 @@ def _build_alert_payload(input_type: str, server_url: str, raw_log: str,
             "raw_payload": {"url": server_url},
         }
     return {
-        "source":      "log_paste",
+        "source":      "prometheus",
         "service":     service,
         "severity":    _infer_severity(raw_log),
         "alert_name":  "LogAlertIngested",

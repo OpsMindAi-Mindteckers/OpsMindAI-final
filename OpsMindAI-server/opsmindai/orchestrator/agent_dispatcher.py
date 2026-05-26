@@ -19,15 +19,15 @@ logger = logging.getLogger(__name__)
 # Maps the short task_name used by task_router to the fully-qualified
 # Celery task path registered in each tasks/*.py module.
 _TASK_MAP: dict[str, str] = {
-    "refactor.run_analysis":  "opsmindai.tasks.refactor_tasks.task_run_analysis",
-    "refactor.run_suggest":   "opsmindai.tasks.refactor_tasks.task_run_suggest",
-    "refactor.run_apply":     "opsmindai.tasks.refactor_tasks.task_run_apply",
-    "testing.run_generation": "opsmindai.tasks.testing_tasks.task_run_generation",
-    "testing.run_suite":      "opsmindai.tasks.testing_tasks.task_run_suite",
-    "testing.run_regression": "opsmindai.tasks.testing_tasks.task_run_regression",
-    "sre.run_ingest":         "opsmindai.tasks.sre_tasks.task_run_ingest",
-    "sre.run_rca":            "opsmindai.tasks.sre_tasks.task_run_rca",
-    "sre.run_remediate":      "opsmindai.tasks.sre_tasks.task_run_remediate",
+    "refactor.run_analysis":  "refactor.run_analysis",
+    "refactor.run_suggest":   "refactor.run_suggest",
+    "refactor.run_apply":     "refactor.run_apply",
+    "testing.run_generation": "testing.run_generation",
+    "testing.run_suite":      "testing.run_suite",
+    "testing.run_regression": "testing.run_regression",
+    "sre.run_ingest":         "sre.run_ingest",
+    "sre.run_rca":            "sre.run_rca",
+    "sre.run_remediate":      "sre.run_remediate",
 }
 
 

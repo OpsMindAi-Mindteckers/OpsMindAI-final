@@ -147,8 +147,14 @@ async def fetch_logs(
 
     url = f"{base_url.rstrip('/')}/loki/api/v1/query_range"
 
+    # Grafana Cloud Loki requires Basic Auth: loki_user_id:api_key
+    import os as _os
+    _loki_user = _os.environ.get("LOKI_USER_ID", "")
+    _loki_key  = _os.environ.get("GRAFANA_API_KEY", "")
+    _loki_auth = (_loki_user, _loki_key) if _loki_user and _loki_key else None
+
     try:
-        async with httpx.AsyncClient(timeout=_LOKI_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=_LOKI_TIMEOUT_S, auth=_loki_auth) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()

@@ -21,30 +21,22 @@ logger = logging.getLogger(__name__)
 
 _ANTHROPIC_MODEL = "claude-sonnet-4-6"
 _OPENAI_MODEL    = "gpt-4o"
+_OPENROUTER_MODEL = "openrouter/free"
 
 
 async def _safe_close_client(client) -> None:
     """
-    Safely close an async HTTP client, but skip in Celery workers.
-    
-    In Celery multiprocessing workers, the entire process exits anyway,
-    so explicit cleanup is unnecessary and causes "Event loop is closed" errors.
-    Just return immediately—let OS cleanup file descriptors.
+    Safely close an async HTTP client, suppressing errors if the event loop
+    is closed or closing (common in Celery workers).
     """
-    # In Celery worker processes, don't attempt cleanup
-    import os
-    if os.environ.get("CELERY_WORKER_PROCESS"):
-        return
-    
-    # In regular async contexts, attempt graceful cleanup
     try:
         loop = asyncio.get_running_loop()
         if not loop.is_closed():
             await asyncio.wait_for(client.close(), timeout=1.0)
     except (RuntimeError, asyncio.TimeoutError, asyncio.CancelledError):
-        pass  # Event loop already closed or timeout
-    except Exception:
-        pass  # Any other error during cleanup—ignore
+        logger.debug("Skipped client cleanup (event loop unavailable/closed)")
+    except Exception as e:
+        logger.debug(f"Non-critical error during client cleanup: {e}")
 
 
 async def generate(prompt: str, system: Optional[str] = None) -> str:
@@ -82,7 +74,7 @@ async def _call_anthropic(prompt: str, system: Optional[str]) -> str:
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     try:
         kwargs: dict = {
-            "model":      _ANTHROPIC_MODEL,
+            "model":      _OPENROUTER_MODEL,
             "max_tokens": 4096,
             "messages":   [{"role": "user", "content": prompt}],
         }
@@ -95,7 +87,7 @@ async def _call_anthropic(prompt: str, system: Optional[str]) -> str:
                 }
             ]
 
-        logger.debug("cloud_llm anthropic model=%s", _ANTHROPIC_MODEL)
+        logger.debug("cloud_llm openrouter model=%s", _OPENROUTER_MODEL)
         msg = await client.messages.create(**kwargs)
         return msg.content[0].text
     finally:
@@ -178,5 +170,5 @@ def get_model_name() -> str:
     if provider == "openai":
         return f"openai/{_OPENAI_MODEL}"
     if provider == "openrouter":
-        return settings.REFACTOR_MODEL
+        return f"openrouter/{_OPENROUTER_MODEL}"
     return f"{provider}/unknown"
