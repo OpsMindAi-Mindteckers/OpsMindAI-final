@@ -66,6 +66,6 @@ celery_app.conf.update(
     task_default_priority=5,
 
     # Time limits (seconds) — soft triggers SoftTimeLimitExceeded, hard = SIGKILL
-    task_soft_time_limit=600,            # 10 min
-    task_time_limit=660,                 # 11 min
+    task_soft_time_limit=240,            # 10 min
+    task_time_limit=240,                 # 11 min
 )

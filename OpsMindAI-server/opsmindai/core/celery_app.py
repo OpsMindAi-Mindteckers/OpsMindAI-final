@@ -1,3 +1,7 @@
+import warnings
+warnings.filterwarnings("ignore", message=".*Event loop is closed.*", category=RuntimeWarning)
+
+
 """
 opsmindai/core/celery_app.py
 
@@ -14,6 +18,7 @@ Beat (periodic cleanup tasks):
 
 import os
 
+
 from celery import Celery
 
 REDIS_URL  = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -26,7 +31,7 @@ celery_app = Celery(
     include=[
         "opsmindai.tasks.refactor_tasks",
         "opsmindai.tasks.sre_tasks",
-        # "opsmindai.tasks.testing_tasks",  # uncomment when testing agent is deployed
+        "opsmindai.tasks.testing_tasks",
     ],
 )
 
@@ -64,6 +69,62 @@ celery_app.conf.update(
     task_default_priority=5,
 
     # Time limits (seconds) — soft triggers SoftTimeLimitExceeded, hard = SIGKILL
-    task_soft_time_limit=600,            # 10 min
-    task_time_limit=660,                 # 11 min
+    task_soft_time_limit=240,            # 10 min
+    task_time_limit=240,                 # 11 min
 )
+
+
+# ── Suppress harmless "Event loop is closed" errors during worker shutdown ────
+# When Celery workers run async code, background cleanup tasks may fail if the
+# event loop closes before they complete (common in multiprocessing context).
+# This is harmless but produces noisy error logs. Install handlers to suppress.
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Filter RuntimeError warnings about event loop
+
+
+# Install custom exception handler for background tasks
+_original_exception_handler = None
+
+
+def _suppress_event_loop_closed_handler(loop, context):
+    """Suppress 'Event loop is closed' errors from httpx/anyio cleanup in tasks."""
+    exc = context.get("exception")
+    msg = context.get("message", "")
+    
+    # Check if this is the harmless "Event loop is closed" error
+    if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
+        logger.debug("Suppressed: Event loop is closed in background task")
+        return
+    if "Event loop is closed" in str(msg):
+        logger.debug("Suppressed: Event loop is closed (%s)", msg)
+        return
+    
+    # For real errors, use original handler if available
+    if _original_exception_handler:
+        _original_exception_handler(loop, context)
+    else:
+        logger.error("Unhandled error in callback: %s", context)
+
+
+def _install_asyncio_handler():
+    """Install our handler to suppress harmless cleanup errors."""
+    try:
+        global _original_exception_handler
+        if hasattr(asyncio, 'get_exception_handler'):
+            _original_exception_handler = asyncio.get_exception_handler()
+    except Exception:
+        pass
+    
+    try:
+        if hasattr(asyncio, 'set_exception_handler'):
+            asyncio.set_exception_handler(_suppress_event_loop_closed_handler)
+            logger.debug("Installed asyncio exception handler for cleanup errors")
+    except Exception as e:
+        logger.debug("Could not install asyncio handler: %s", e)
+
+
+_install_asyncio_handler()

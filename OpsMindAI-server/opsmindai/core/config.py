@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY:  str = ""
     OPENAI_API_KEY:     str = ""
     OPENROUTER_API_KEY: str = ""  # Set via .env
-    REFACTOR_MODEL:     str = "meta-llama/llama-3.3-70b-instruct:free"
+    REFACTOR_MODEL:     str = "qwen/qwen3-coder"
+    TESTING_MODEL:      str = "openai/gpt-oss-120b"
 
     # ── Vector store ──────────────────────────────────────────────────────────
     VECTOR_STORE:   str = "chromadb"              # chromadb | qdrant
