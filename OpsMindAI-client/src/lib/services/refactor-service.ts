@@ -118,8 +118,8 @@ export const refactorService = {
 
   async pollJobStatus(
     jobId: string,
-    maxAttempts: number = 60,
-    intervalMs: number = 2000
+    maxAttempts: number = 120,
+    intervalMs: number = 5000
   ): Promise<RefactorJobStatus | null> {
     let attempts = 0;
     while (attempts < maxAttempts) {

@@ -19,7 +19,7 @@ query_error_rate()  — convenience wrapper for SRE-GPT RCA
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional  # noqa: F401 — Optional used in _prom_auth return type
 
 import httpx
 from prometheus_client import (
@@ -104,6 +104,15 @@ def get_metrics_output() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
 
+# ── Auth helper ───────────────────────────────────────────────────────────────
+
+def _prom_auth() -> Optional[httpx.BasicAuth]:
+    """Grafana Cloud Prometheus requires Basic Auth (user ID + API key)."""
+    if settings.PROMETHEUS_USER_ID and settings.GRAFANA_API_KEY:
+        return httpx.BasicAuth(settings.PROMETHEUS_USER_ID, settings.GRAFANA_API_KEY)
+    return None
+
+
 # ── Prometheus HTTP API query helpers ─────────────────────────────────────────
 
 async def query_instant(promql: str) -> list[dict[str, Any]]:
@@ -118,7 +127,7 @@ async def query_instant(promql: str) -> list[dict[str, Any]]:
     """
     url = f"{settings.PROMETHEUS_URL.rstrip('/')}/api/v1/query"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, auth=_prom_auth()) as client:
             resp = await client.get(url, params={"query": promql})
             resp.raise_for_status()
             data = resp.json()
@@ -148,7 +157,7 @@ async def query_range(
     """
     url = f"{settings.PROMETHEUS_URL.rstrip('/')}/api/v1/query_range"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, auth=_prom_auth()) as client:
             resp = await client.get(
                 url,
                 params={

@@ -1,0 +1,45 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: opsmindai
+
+rule_files:
+  - alerts.yml
+
+# ── Push metrics to Grafana Cloud Prometheus ──────────────────────────────────
+# Fill in your Grafana Cloud Prometheus remote_write URL and credentials.
+# Found at: Grafana Cloud → Your Stack → Details → Prometheus → Remote Write URL
+remote_write:
+  - url: https://prometheus-prod-43-prod-ap-south-1.grafana.net/api/prom/push
+    basic_auth:
+      username: "3257000"
+      password: glc_eyJvIjoiMTc4NzM0MSIsIm4iOiJzdGFjay0xNjY2Mzg4LWhtLXdyaXRlLW9wc21pbmRhaS1ncmFmYW5hIiwiayI6InZSVlQxZll3WjVxTjAwNGY0dzYxNGxENyIsIm0iOnsiciI6InByb2QtYXAtc291dGgtMSJ9fQ==
+
+# ── Alert routing to Grafana Cloud Alertmanager ───────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []   # Grafana Cloud handles alerting — leave empty for local dev
+
+scrape_configs:
+
+  # FastAPI app — exposes GET /metrics (prometheus_client text format)
+  - job_name: opsmindai-api
+    static_configs:
+      - targets:
+          - host.docker.internal:8000   # reaches your local FastAPI from inside Docker
+    metrics_path: /metrics
+
+  # Celery workers
+  - job_name: opsmindai-worker
+    static_configs:
+      - targets:
+          - host.docker.internal:9000
+    metrics_path: /metrics
+
+  # Prometheus self-scrape
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

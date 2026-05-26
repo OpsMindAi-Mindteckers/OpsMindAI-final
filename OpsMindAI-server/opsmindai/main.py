@@ -1,3 +1,219 @@
+# """
+# opsmindai/main.py
+ 
+# FastAPI application entry point.
+ 
+# Changes from original:
+# - Redis connection pool created at startup and injected into app.state
+# - Pool cleanly drained at shutdown via lifespan
+# - Request-ID middleware added (each request gets a unique X-Request-ID header)
+# - Health check endpoint added (/health)
+# """
+ 
+# import uuid
+# import logging
+# from contextlib import asynccontextmanager
+ 
+# from fastapi import FastAPI, Request
+# from fastapi.middleware.cors import CORSMiddleware
+# from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+# from fastapi.staticfiles import StaticFiles
+# from slowapi import _rate_limit_exceeded_handler
+# from slowapi.errors import RateLimitExceeded
+# from starlette.middleware.base import BaseHTTPMiddleware
+ 
+# from opsmindai.api.v1.auth import limiter
+# from opsmindai.api.v1.router import api_router
+# from opsmindai.core.redis import create_redis_pool, close_redis_pool
+# from opsmindai.db.session import init_db
+# from opsmindai.middleware.auth import AuthMiddleware
+# from opsmindai.middleware.rate_limiter import RateLimiterMiddleware
+# from opsmindai.middleware.logging import RequestLoggingMiddleware
+ 
+# logger = logging.getLogger(__name__)
+ 
+ 
+# # ── Request-ID middleware ─────────────────────────────────────────────────────
+ 
+# class RequestIDMiddleware(BaseHTTPMiddleware):
+#     """Attach a unique X-Request-ID header to every request and response."""
+ 
+#     async def dispatch(self, request: Request, call_next):
+#         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+#         request.state.request_id = request_id
+#         response = await call_next(request)
+#         response.headers["X-Request-ID"] = request_id
+#         return response
+ 
+ 
+# # ── Lifespan ──────────────────────────────────────────────────────────────────
+ 
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # ── Startup ───────────────────────────────────────────────────────────────
+#     await init_db()
+#     logger.info("Database initialised")
+ 
+#     pool = create_redis_pool()
+#     app.state.redis_pool = pool
+#     logger.info("Redis pool attached to app.state.redis_pool")
+ 
+#     yield
+ 
+#     # ── Shutdown ──────────────────────────────────────────────────────────────
+#     await close_redis_pool()
+#     logger.info("Redis pool closed")
+ 
+ 
+# # ── App factory ───────────────────────────────────────────────────────────────
+ 
+# app = FastAPI(
+#     title="OpsMindAI",
+#     version="1.0.0",
+#     lifespan=lifespan,
+#     docs_url=None,   # served manually below with cookie support
+#     swagger_ui_parameters={"persistAuthorization": True},
+# )
+ 
+# # Middleware (order matters — outermost wraps run first on request, last on response)
+# # CORSMiddleware           → outermost (handles preflight requests)
+# # RequestLoggingMiddleware → sees every request + final status code
+# # RateLimiterMiddleware    → before auth (rejects floods before Clerk API calls)
+# # AuthMiddleware           → before route handlers
+# # RequestIDMiddleware      → innermost (attaches request_id used by logging above)
+# app.add_middleware(RequestLoggingMiddleware)
+# app.add_middleware(RateLimiterMiddleware)
+# app.add_middleware(AuthMiddleware)
+# app.add_middleware(RequestIDMiddleware)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         "http://localhost:3000",      # Next.js dev
+#         "http://localhost:5173",      # Vite dev
+#         "http://localhost:8000",      # FastAPI dev
+#         "http://127.0.0.1:3000",      # Loopback
+#         "http://192.168.10.30:3000",  # Network dev
+#         "https://yourdomain.com",     # Production frontend
+#     ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     expose_headers=["X-Request-ID"],
+# )
+# # app.add_middleware(RequestLoggingMiddleware)
+# # app.add_middleware(RateLimiterMiddleware)
+# # app.add_middleware(AuthMiddleware)
+# # app.add_middleware(RequestIDMiddleware)
+ 
+# # Rate-limit error handler
+# app.state.limiter = limiter
+# app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+ 
+# # API routes
+# app.include_router(api_router, prefix="/api/v1")
+ 
+# # Static files
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+ 
+ 
+# # ── Prometheus metrics ────────────────────────────────────────────────────────
+ 
+# @app.get("/metrics", include_in_schema=False)
+# async def metrics():
+#     """
+#     Prometheus metrics endpoint (SRS §11.1, FR-07).
+#     Exposes all 8 opsmind_* metrics in Prometheus text format.
+#     Not protected by auth — Prometheus scrapes this internally.
+#     """
+#     from fastapi.responses import Response
+#     from opsmindai.monitoring.prometheus_client import get_metrics_output
+#     body, content_type = get_metrics_output()
+#     return Response(content=body, media_type=content_type)
+ 
+ 
+# # ── Health check ──────────────────────────────────────────────────────────────
+ 
+# @app.get("/health", include_in_schema=False)
+# async def health(request: Request):
+#     """
+#     Liveness + readiness probe for Docker / Kubernetes.
+ 
+#     Checks:
+#     - Redis ping
+#     Returns 200 if healthy, 503 if any dependency is down.
+#     """
+#     import redis.asyncio as aioredis
+ 
+#     checks: dict = {"status": "ok", "redis": "ok", "db": "ok"}
+#     http_status = 200
+ 
+#     try:
+#         client = aioredis.Redis(connection_pool=request.app.state.redis_pool)
+#         await client.ping()
+#         await client.aclose()
+#     except Exception as exc:
+#         checks["redis"] = f"error: {exc}"
+#         checks["status"] = "degraded"
+#         http_status = 503
+ 
+#     return JSONResponse(content=checks, status_code=http_status)
+ 
+ 
+# # ── Page routes ───────────────────────────────────────────────────────────────
+ 
+# @app.get("/", include_in_schema=False)
+# async def root():
+#     return RedirectResponse(url="/login")
+ 
+ 
+# @app.get("/login", include_in_schema=False)
+# async def login_page():
+#     return FileResponse("static/login.html")
+ 
+ 
+# @app.get("/docs", include_in_schema=False)
+# async def custom_swagger_docs():
+#     """Swagger UI that sends cookies with every request."""
+#     return HTMLResponse("""
+# <!DOCTYPE html>
+# <html>
+# <head>
+#     <title>OpsMindAI API</title>
+#     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+# </head>
+# <body>
+#     <div id="swagger-ui"></div>
+#     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+#     <script>
+#         SwaggerUIBundle({
+#             url: '/openapi.json',
+#             dom_id: '#swagger-ui',
+#             persistAuthorization: true,
+#             requestInterceptor: function(request) {
+#                 request.credentials = 'include';
+#                 return request;
+#             },
+#         });
+#     </script>
+# </body>
+# </html>
+#     """)
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 """
 opsmindai/main.py
  
@@ -195,3 +411,4 @@ async def custom_swagger_docs():
 </html>
     """)
  
+

@@ -27,6 +27,19 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
 
+
+def _loki_auth() -> Optional[httpx.BasicAuth]:
+    """
+    Grafana Cloud Loki requires Basic Auth:
+      username = LOKI_USER_ID  (numeric, from stack details)
+      password = GRAFANA_API_KEY
+    Returns None for local/unauthenticated Loki.
+    """
+    if settings.LOKI_USER_ID and settings.GRAFANA_API_KEY:
+        return httpx.BasicAuth(settings.LOKI_USER_ID, settings.GRAFANA_API_KEY)
+    return None
+
+
 # ── Low-level query ────────────────────────────────────────────────────────────
 
 async def query_range(
@@ -63,7 +76,7 @@ async def query_range(
     logger.debug("loki query: %s window=%s→%s", logql, start.isoformat(), end.isoformat())
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, auth=_loki_auth()) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
